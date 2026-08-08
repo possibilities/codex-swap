@@ -26,10 +26,13 @@ export class Database {
     ensurePrivateDir(path.dirname(dbPath));
     refuseSymlink(dbPath);
     const handle = new DatabaseSync(dbPath);
+    // busy_timeout must precede the WAL switch: on a brand-new database,
+    // journal_mode=WAL takes a lock that concurrent first-opens contend on,
+    // and without the timeout they fail immediately with SQLITE_BUSY.
+    handle.exec("PRAGMA busy_timeout = 5000");
     handle.exec("PRAGMA journal_mode = WAL");
     handle.exec("PRAGMA synchronous = NORMAL");
     handle.exec("PRAGMA foreign_keys = ON");
-    handle.exec("PRAGMA busy_timeout = 5000");
     for (const suffix of ["", "-wal", "-shm"]) {
       tightenFileMode(`${dbPath}${suffix}`);
     }

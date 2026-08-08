@@ -215,7 +215,11 @@ test("concurrent reconciliations converge without corruption", async () => {
     Array.from({ length: 4 }, () => runCli(["accounts", "--json"], world.env)),
   );
   for (const result of results) {
-    assert.equal(result.code, 0, result.stderr);
+    assert.equal(
+      result.code,
+      0,
+      `stderr: ${result.stderr}\nstdout: ${result.stdout}`,
+    );
   }
   const final = await runCli(["accounts", "--json"], world.env);
   const data = (JSON.parse(final.stdout) as AccountsEnvelope).data;
