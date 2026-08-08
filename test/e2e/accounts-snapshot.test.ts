@@ -30,7 +30,10 @@ function accountRecord(n: number, overrides?: Record<string, unknown>) {
     // Distinct per account: ndy's loadAccounts() merges records that share a
     // refresh token during store normalization.
     refreshToken: `${SECRET_PREFIX}-${n}`,
+    // Fresh cached access tokens so the credential broker never attempts a
+    // live OAuth refresh from tests.
     accessToken: ACCESS_SECRET,
+    expiresAt: Date.now() + 3_600_000,
     enabled: true,
     addedAt: 1700000000000 + n,
     lastUsed: 1700000001000 + n,
@@ -58,6 +61,8 @@ function makeWorld(): World {
       CODEX_MULTI_AUTH_DIR: multiAuthDir,
       CODEX_SWAP_HOME: swapHome,
       CODEX_HOME: path.join(swapHome, "codex-home"),
+      // Dead local endpoint: usage fetches fail fast without real network.
+      CODEX_SWAP_UNSAFE_USAGE_BASE_URL: "http://127.0.0.1:1",
     },
   };
   writeStore(world, [accountRecord(1), accountRecord(2)]);
@@ -195,8 +200,10 @@ test("snapshot --json carries the versioned shape with fail-safe eligibility", a
   assert.equal(envelope.data.canonicalCodexHome, world.env["CODEX_HOME"]);
   assert.equal(envelope.data.recommendation, null);
   for (const account of envelope.data.accounts) {
-    assert.equal(account.usage.status, "unknown");
+    // The dead endpoint means no decision-grade data: fail safe, never
+    // optimistic.
     assert.equal(account.usage.decisionGrade, false);
+    assert.equal(account.usage.measurement, null);
     assert.equal(account.selection.eligible, false);
     assert.ok(account.selection.exclusions.includes("usage_unknown"));
   }

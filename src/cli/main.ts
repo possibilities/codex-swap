@@ -34,6 +34,7 @@ import { runAuthCommand } from "./commands/auth.ts";
 import { runHistoryCommand } from "./commands/history.ts";
 import { runRunCommand } from "./commands/run.ts";
 import { runSnapshotCommand } from "./commands/snapshot.ts";
+import { runUsageCommand } from "./commands/usage.ts";
 
 type CommandHandler = (args: string[]) => Promise<number>;
 
@@ -41,6 +42,7 @@ const commands = new Map<string, CommandHandler>([
   ["auth", runAuthCommand],
   ["accounts", runAccountsCommand],
   ["snapshot", runSnapshotCommand],
+  ["usage", runUsageCommand],
   ["run", runRunCommand],
   ["history", runHistoryCommand],
 ]);

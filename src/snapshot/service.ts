@@ -3,13 +3,16 @@ import {
   identityConflictKeys,
   type CatalogRow,
 } from "../accounts/catalog.ts";
-import { NdyStoreReader } from "../ndy/store-reader.ts";
-import { resolveCodexHome } from "../ndy/environment.ts";
+import { CredentialBroker } from "../accounts/credential-broker.ts";
+import { loadSettings } from "../config/load.ts";
+import type { Settings } from "../config/schema.ts";
 import {
   assertSupportedNdyVersion,
   resolveNdyInstallation,
   type NdyInstallation,
 } from "../ndy/bin-resolver.ts";
+import { resolveCodexHome } from "../ndy/environment.ts";
+import { NdyStoreReader } from "../ndy/store-reader.ts";
 import { Database } from "../storage/database.ts";
 import {
   lineageHmac,
@@ -17,38 +20,29 @@ import {
 } from "../storage/install-secret.ts";
 import { dataRoot, databasePath } from "../storage/paths.ts";
 import { type Clock, systemClock, toIsoUtc } from "../util/clock.ts";
-import type { UsageMeasurement } from "../usage/types.ts";
+import { UsageCollector, fixedPlanner, type PollPlanner } from "../usage/collector.ts";
+import {
+  DEFAULT_USAGE_BASE_URL,
+  DirectUsageProbe,
+} from "../usage/direct-usage-probe.ts";
+import type { UsageProbe } from "../usage/probe.ts";
+import { UsageStore, type UsageStateRow } from "../usage/store.ts";
+import { evaluateTrust } from "../usage/trust.ts";
 import {
   SNAPSHOT_SCHEMA_VERSION,
   type AccountExclusionReason,
   type Snapshot,
   type SnapshotAccountView,
+  type SnapshotLastGoodView,
   type SnapshotUsageView,
 } from "./types.ts";
 
 /**
  * Assembles one coherent snapshot (handoff §19): reconcile the catalog,
- * derive sentinels, read stored usage, compute eligibility. The usage store
- * decides whether any network fetch happens — this service never fetches on
- * its own in milestone 2; the collector pass is wired in with the usage
- * store milestone.
+ * run the store-governed collector over eligible due accounts, then read
+ * everything and compute trust and eligibility. Repeated calls are safe —
+ * the usage store decides whether any network request happens.
  */
-export interface UsageStateRow {
-  accountKey: string;
-  lastGoodJson: string | null;
-  fetchedAtMs: number | null;
-  lastAttemptAtMs: number | null;
-  consecutiveFailures: number;
-  lastErrorCode: string | null;
-  lastErrorHttpStatus: number | null;
-  lastErrorSummary: string | null;
-  backoffUntilMs: number | null;
-  nextPollAtMs: number | null;
-  pollIntervalMs: number | null;
-  last429AtMs: number | null;
-  authDeadStrikes: number;
-}
-
 export interface PolicyRow {
   manuallyDisabled: boolean;
   priority: number;
@@ -66,26 +60,53 @@ const DEFAULT_POLICY: PolicyRow = {
 };
 
 export class SnapshotService {
+  readonly settings: Settings;
   private readonly db: Database;
   private readonly catalog: AccountCatalog;
   private readonly reader: NdyStoreReader;
   private readonly installation: NdyInstallation;
   private readonly secret: Buffer;
   private readonly clock: Clock;
+  private readonly usageStore: UsageStore;
+  private readonly collector: UsageCollector;
 
   constructor(options: {
     db: Database;
     reader: NdyStoreReader;
     installation: NdyInstallation;
     secret: Buffer;
+    settings: Settings;
     clock?: Clock;
+    probe?: UsageProbe;
+    broker?: CredentialBroker;
+    planner?: PollPlanner;
   }) {
     this.db = options.db;
     this.reader = options.reader;
     this.installation = options.installation;
     this.secret = options.secret;
+    this.settings = options.settings;
     this.clock = options.clock ?? systemClock;
     this.catalog = new AccountCatalog(this.db, this.clock);
+    this.usageStore = new UsageStore({
+      db: this.db,
+      settings: this.settings.usage,
+      clock: this.clock,
+    });
+    const broker =
+      options.broker ??
+      new CredentialBroker({
+        lineage: (token) => lineageHmac(this.secret, token),
+        clock: this.clock,
+      });
+    const probe = options.probe ?? new DirectUsageProbe({ clock: this.clock });
+    this.collector = new UsageCollector({
+      store: this.usageStore,
+      broker,
+      probe,
+      planner: options.planner ?? fixedPlanner(this.settings.usage),
+      clock: this.clock,
+    });
   }
 
   static async open(
@@ -98,17 +119,42 @@ export class SnapshotService {
     );
     assertSupportedNdyVersion(installation);
     const root = dataRoot(env);
+    const { settings } = loadSettings(root);
+    const secret = loadOrCreateInstallSecret(root);
+
+    const unsafeBaseUrl = env["CODEX_SWAP_UNSAFE_USAGE_BASE_URL"];
+    let probe: UsageProbe | undefined;
+    if (unsafeBaseUrl !== undefined && unsafeBaseUrl.length > 0) {
+      process.stderr.write(
+        `codex-swap: CODEX_SWAP_UNSAFE_USAGE_BASE_URL overrides the usage endpoint (${unsafeBaseUrl}); development only\n`,
+      );
+      probe = new DirectUsageProbe({ baseUrl: unsafeBaseUrl, clock });
+    } else {
+      probe = new DirectUsageProbe({ baseUrl: DEFAULT_USAGE_BASE_URL, clock });
+    }
+
     return new SnapshotService({
       db: Database.open(databasePath(root), clock),
       reader: new NdyStoreReader(env),
       installation,
-      secret: loadOrCreateInstallSecret(root),
+      secret,
+      settings,
       clock,
+      probe,
+      broker: new CredentialBroker({
+        lineage: (token) => lineageHmac(secret, token),
+        env,
+        clock,
+      }),
     });
   }
 
   get database(): Database {
     return this.db;
+  }
+
+  get store(): UsageStore {
+    return this.usageStore;
   }
 
   async reconcile(): Promise<CatalogRow[]> {
@@ -119,17 +165,50 @@ export class SnapshotService {
     return this.catalog.listAll();
   }
 
-  async build(env: NodeJS.ProcessEnv = process.env): Promise<Snapshot> {
+  /**
+   * Store-governed collection pass: reserve/fetch/record for each fetchable
+   * account. The store's claims, TTLs, backoff, and quarantine decide
+   * whether any single account actually produces a network request.
+   */
+  async collectUsage(options?: {
+    rows?: CatalogRow[];
+    only?: readonly string[];
+    force?: boolean;
+  }): Promise<void> {
+    const rows = options?.rows ?? this.catalog.listAll();
+    const conflicts = identityConflictKeys(rows.filter((r) => r.present));
+    let keys = rows
+      .filter(
+        (row) =>
+          row.present &&
+          row.authStatus === "ready" &&
+          !conflicts.has(row.accountKey),
+      )
+      .map((row) => row.accountKey);
+    if (options?.only !== undefined) {
+      const allow = new Set(options.only);
+      keys = keys.filter((key) => allow.has(key));
+    }
+    await this.collector.collect(keys, {
+      ...(options?.force !== undefined ? { force: options.force } : {}),
+    });
+  }
+
+  async build(
+    env: NodeJS.ProcessEnv = process.env,
+    options?: { fetchUsage?: boolean },
+  ): Promise<Snapshot> {
     const rows = await this.reconcile();
+    if (options?.fetchUsage !== false) {
+      await this.collectUsage({ rows });
+    }
     const now = this.clock();
-    const conflicts = identityConflictKeys(
-      rows.filter((row) => row.present),
-    );
-    const usageStates = this.readUsageStates();
+    const conflicts = identityConflictKeys(rows.filter((row) => row.present));
+    const usageStates = this.usageStore.readAll();
     const policies = this.readPolicies();
 
     const accounts = rows.map((row) =>
-      buildAccountView(
+      this.buildAccountView(
         row,
         usageStates.get(row.accountKey),
         policies.get(row.accountKey) ?? DEFAULT_POLICY,
@@ -151,36 +230,124 @@ export class SnapshotService {
     };
   }
 
-  private readUsageStates(): Map<string, UsageStateRow> {
-    const rows = this.db.handle
-      .prepare(
-        `SELECT account_key, last_good_json, fetched_at_ms, last_attempt_at_ms,
-                consecutive_failures, last_error_code, last_error_http_status,
-                last_error_summary, backoff_until_ms, next_poll_at_ms,
-                poll_interval_ms, last_429_at_ms, auth_dead_strikes
-         FROM usage_state`,
-      )
-      .all() as Array<Record<string, unknown>>;
-    return new Map(
-      rows.map((row) => {
-        const state: UsageStateRow = {
-          accountKey: row["account_key"] as string,
-          lastGoodJson: row["last_good_json"] as string | null,
-          fetchedAtMs: row["fetched_at_ms"] as number | null,
-          lastAttemptAtMs: row["last_attempt_at_ms"] as number | null,
-          consecutiveFailures: row["consecutive_failures"] as number,
-          lastErrorCode: row["last_error_code"] as string | null,
-          lastErrorHttpStatus: row["last_error_http_status"] as number | null,
-          lastErrorSummary: row["last_error_summary"] as string | null,
-          backoffUntilMs: row["backoff_until_ms"] as number | null,
-          nextPollAtMs: row["next_poll_at_ms"] as number | null,
-          pollIntervalMs: row["poll_interval_ms"] as number | null,
-          last429AtMs: row["last_429_at_ms"] as number | null,
-          authDeadStrikes: row["auth_dead_strikes"] as number,
-        };
-        return [state.accountKey, state];
-      }),
-    );
+  private buildAccountView(
+    row: CatalogRow,
+    usage: UsageStateRow | undefined,
+    policy: PolicyRow,
+    identityConflict: boolean,
+    nowMs: number,
+  ): SnapshotAccountView {
+    const usageView = this.buildUsageView(usage, nowMs);
+    const lastGood = buildLastGoodView(usage, nowMs);
+    const quarantined = usageView.status === "quarantined";
+
+    const exclusions: AccountExclusionReason[] = [];
+    if (!row.present) exclusions.push("absent");
+    if (!row.enabled) exclusions.push("ndy_disabled");
+    if (policy.manuallyDisabled) exclusions.push("manually_disabled");
+    if (row.authStatus === "no_credentials") exclusions.push("no_credentials");
+    if (row.authStatus === "relogin_required" || quarantined) {
+      exclusions.push("relogin_required");
+    }
+    if (identityConflict) exclusions.push("identity_conflict");
+    if (policy.cooldownUntilMs !== null && policy.cooldownUntilMs > nowMs) {
+      exclusions.push("cooldown_active");
+    }
+    if (!usageView.decisionGrade) {
+      exclusions.push("usage_unknown");
+    } else if (usageView.measurement !== null) {
+      const exhausted =
+        usageView.measurement.limitReached === true ||
+        usageView.measurement.windows.some(
+          (w) =>
+            (w.kind === "primary" || w.kind === "secondary") &&
+            w.remainingPercent <= 0,
+        );
+      if (exhausted) exclusions.push("quota_exhausted");
+    }
+
+    const headroom =
+      usageView.decisionGrade && usageView.measurement !== null
+        ? computeHeadroom(usageView.measurement)
+        : null;
+
+    return {
+      accountKey: row.accountKey,
+      providerAccountId: row.providerAccountId,
+      email: row.email,
+      label: row.label,
+      enabled: row.enabled,
+      present: row.present,
+      ndyIndex: row.ndyIndex,
+      auth: {
+        status: quarantined ? "relogin_required" : row.authStatus,
+        reloginRequired: row.authStatus === "relogin_required" || quarantined,
+      },
+      identityConflict,
+      policy: {
+        manuallyDisabled: policy.manuallyDisabled,
+        priority: policy.priority,
+        weight: policy.weight,
+        maxConcurrent: policy.maxConcurrent,
+      },
+      usage: usageView,
+      lastGoodUsage: lastGood,
+      selection: {
+        eligible: exclusions.length === 0,
+        exclusions,
+        headroomPercent: headroom,
+        activeLeases: 0,
+      },
+    };
+  }
+
+  private buildUsageView(
+    usage: UsageStateRow | undefined,
+    nowMs: number,
+  ): SnapshotUsageView {
+    const empty: SnapshotUsageView = {
+      status: "unknown",
+      decisionGrade: false,
+      measurement: null,
+      fetchedAt: null,
+      ageSeconds: null,
+      nextPollAt: null,
+      lastError: null,
+    };
+    if (usage === undefined) return empty;
+
+    const trust = evaluateTrust(usage, this.settings.usage, nowMs);
+    const view: SnapshotUsageView = {
+      ...empty,
+      status: trust.status,
+      decisionGrade: trust.decisionGrade,
+      measurement: trust.decisionGrade ? trust.measurement : null,
+    };
+    if (usage.lastErrorCode !== null) {
+      view.lastError = {
+        code: usage.lastErrorCode,
+        httpStatus: usage.lastErrorHttpStatus,
+        summary: usage.lastErrorSummary,
+        at:
+          usage.lastAttemptAtMs !== null ? toIsoUtc(usage.lastAttemptAtMs) : null,
+      };
+      if (
+        view.status !== "quarantined" &&
+        usage.backoffUntilMs !== null &&
+        usage.backoffUntilMs > nowMs &&
+        !trust.decisionGrade
+      ) {
+        view.status = "backoff";
+      }
+    }
+    if (usage.nextPollAtMs !== null) {
+      view.nextPollAt = toIsoUtc(usage.nextPollAtMs);
+    }
+    if (usage.fetchedAtMs !== null) {
+      view.fetchedAt = toIsoUtc(usage.fetchedAtMs);
+      view.ageSeconds = Math.max(0, Math.round((nowMs - usage.fetchedAtMs) / 1000));
+    }
+    return view;
   }
 
   private readPolicies(): Map<string, PolicyRow> {
@@ -210,126 +377,34 @@ export class SnapshotService {
   }
 }
 
-function buildAccountView(
-  row: CatalogRow,
-  usage: UsageStateRow | undefined,
-  policy: PolicyRow,
-  identityConflict: boolean,
-  nowMs: number,
-): SnapshotAccountView {
-  const usageView = buildUsageView(usage, nowMs);
-  const lastGood = buildLastGoodView(usage, nowMs);
-
-  const exclusions: AccountExclusionReason[] = [];
-  if (!row.present) exclusions.push("absent");
-  if (!row.enabled) exclusions.push("ndy_disabled");
-  if (policy.manuallyDisabled) exclusions.push("manually_disabled");
-  if (row.authStatus === "no_credentials") exclusions.push("no_credentials");
-  if (row.authStatus === "relogin_required") exclusions.push("relogin_required");
-  if (identityConflict) exclusions.push("identity_conflict");
-  if (
-    policy.cooldownUntilMs !== null &&
-    policy.cooldownUntilMs > nowMs
-  ) {
-    exclusions.push("cooldown_active");
-  }
-  if (!usageView.decisionGrade) exclusions.push("usage_unknown");
-
-  return {
-    accountKey: row.accountKey,
-    providerAccountId: row.providerAccountId,
-    email: row.email,
-    label: row.label,
-    enabled: row.enabled,
-    present: row.present,
-    ndyIndex: row.ndyIndex,
-    auth: {
-      status: row.authStatus,
-      reloginRequired: row.authStatus === "relogin_required",
-    },
-    identityConflict,
-    policy: {
-      manuallyDisabled: policy.manuallyDisabled,
-      priority: policy.priority,
-      weight: policy.weight,
-      maxConcurrent: policy.maxConcurrent,
-    },
-    usage: usageView,
-    lastGoodUsage: lastGood,
-    selection: {
-      eligible: exclusions.length === 0,
-      exclusions,
-      headroomPercent: null,
-      activeLeases: 0,
-    },
-  };
-}
-
-function parseMeasurement(json: string | null): UsageMeasurement | null {
-  if (json === null) return null;
-  try {
-    return JSON.parse(json) as UsageMeasurement;
-  } catch {
-    return null;
-  }
-}
-
-function buildUsageView(
-  usage: UsageStateRow | undefined,
-  nowMs: number,
-): SnapshotUsageView {
-  const empty: SnapshotUsageView = {
-    status: "unknown",
-    decisionGrade: false,
-    measurement: null,
-    fetchedAt: null,
-    ageSeconds: null,
-    nextPollAt: null,
-    lastError: null,
-  };
-  if (usage === undefined) return empty;
-
-  const view = { ...empty };
-  if (usage.lastErrorCode !== null) {
-    view.lastError = {
-      code: usage.lastErrorCode,
-      httpStatus: usage.lastErrorHttpStatus,
-      summary: usage.lastErrorSummary,
-      at: usage.lastAttemptAtMs !== null ? toIsoUtc(usage.lastAttemptAtMs) : null,
-    };
-    view.status = "error";
-  }
-  if (usage.backoffUntilMs !== null && usage.backoffUntilMs > nowMs) {
-    view.status = "backoff";
-  }
-  if (usage.nextPollAtMs !== null) {
-    view.nextPollAt = toIsoUtc(usage.nextPollAtMs);
-  }
-
-  const measurement = parseMeasurement(usage.lastGoodJson);
-  if (measurement === null || usage.fetchedAtMs === null) {
-    return view;
-  }
-  // Trust rules land with the usage-store milestone; until a collector has
-  // stored measurements this path only shapes existing data.
-  view.measurement = measurement;
-  view.fetchedAt = toIsoUtc(usage.fetchedAtMs);
-  view.ageSeconds = Math.max(0, Math.round((nowMs - usage.fetchedAtMs) / 1000));
-  view.decisionGrade = true;
-  if (view.status === "unknown") view.status = "ok";
-  return view;
+function computeHeadroom(measurement: {
+  windows: Array<{ kind: string; usedPercent: number }>;
+}): number | null {
+  const relevant = measurement.windows.filter(
+    (w) => w.kind === "primary" || w.kind === "secondary",
+  );
+  if (relevant.length === 0) return null;
+  const worst = Math.max(
+    ...relevant.map((w) => Math.min(100, Math.max(0, w.usedPercent))),
+  );
+  return 100 - worst;
 }
 
 function buildLastGoodView(
   usage: UsageStateRow | undefined,
   nowMs: number,
-): Snapshot["accounts"][number]["lastGoodUsage"] {
-  if (usage === undefined || usage.fetchedAtMs === null) return null;
-  const measurement = parseMeasurement(usage.lastGoodJson);
-  if (measurement === null) return null;
-  return {
-    measurement,
-    fetchedAt: toIsoUtc(usage.fetchedAtMs),
-    ageSeconds: Math.max(0, Math.round((nowMs - usage.fetchedAtMs) / 1000)),
-  };
+): SnapshotLastGoodView | null {
+  if (usage === undefined || usage.fetchedAtMs === null || usage.lastGoodJson === null) {
+    return null;
+  }
+  try {
+    const measurement = JSON.parse(usage.lastGoodJson) as SnapshotLastGoodView["measurement"];
+    return {
+      measurement,
+      fetchedAt: toIsoUtc(usage.fetchedAtMs),
+      ageSeconds: Math.max(0, Math.round((nowMs - usage.fetchedAtMs) / 1000)),
+    };
+  } catch {
+    return null;
+  }
 }
