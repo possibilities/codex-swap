@@ -20,6 +20,11 @@ export interface RedactedNdyAccount {
   cooldownReason?: string;
   /** True when the stored record currently has a refresh token. */
   hasCredentials: boolean;
+  /**
+   * Keyed fingerprint of the refresh token (HMAC with the local install
+   * secret) for rotation detection. Database-only — never public JSON.
+   */
+  lineageHmac?: string;
   /** Position in ndy's array at read time — display metadata only. */
   ndyIndex: number;
 }
@@ -43,14 +48,20 @@ export interface NdyAccountRecordLike {
 export function redactNdyAccount(
   record: NdyAccountRecordLike,
   ndyIndex: number,
+  /** Computes the lineage HMAC in place so the raw token never leaves. */
+  lineage?: (refreshToken: string) => string,
 ): RedactedNdyAccount {
+  const hasCredentials =
+    typeof record.refreshToken === "string" && record.refreshToken.length > 0;
   const redacted: RedactedNdyAccount = {
     accountKey: deriveAccountKey(record),
     enabled: record.enabled !== false,
-    hasCredentials:
-      typeof record.refreshToken === "string" && record.refreshToken.length > 0,
+    hasCredentials,
     ndyIndex,
   };
+  if (hasCredentials && lineage !== undefined) {
+    redacted.lineageHmac = lineage(record.refreshToken as string);
+  }
   if (record.recordId !== undefined) redacted.recordId = record.recordId;
   if (record.accountId !== undefined) {
     redacted.providerAccountId = record.accountId;

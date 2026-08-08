@@ -44,13 +44,16 @@ export class NdyStoreReader {
     return this.accountsFilePath;
   }
 
-  async loadRedactedAccounts(): Promise<RedactedNdyAccount[]> {
+  async loadRedactedAccounts(options?: {
+    /** Lineage HMAC computed in place; the raw token never leaves ndy's record. */
+    lineage?: (refreshToken: string) => string;
+  }): Promise<RedactedNdyAccount[]> {
     const storage = await storageModule();
     storage.setStoragePathDirect(this.accountsFilePath);
     const store = await storage.loadAccounts();
     if (store === null) return [];
     return store.accounts.map((record, index) =>
-      redactNdyAccount(record, index),
+      redactNdyAccount(record, index, options?.lineage),
     );
   }
 }
