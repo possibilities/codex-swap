@@ -19,6 +19,12 @@ import {
   loadOrCreateInstallSecret,
 } from "../storage/install-secret.ts";
 import { dataRoot, databasePath } from "../storage/paths.ts";
+import { InvocationLeaseStore, type InvocationLease } from "../selection/leases.ts";
+import {
+  selectAccount,
+  type SelectionResult,
+  type SelectionStrategy,
+} from "../selection/selector.ts";
 import { type Clock, systemClock, toIsoUtc } from "../util/clock.ts";
 import { UsageCollector, adaptivePlanner, type PollPlanner } from "../usage/collector.ts";
 import { selectFetchSet } from "../usage/scheduler.ts";
@@ -73,6 +79,7 @@ export class SnapshotService {
   private readonly clock: Clock;
   private readonly usageStore: UsageStore;
   private readonly collector: UsageCollector;
+  readonly leases: InvocationLeaseStore;
 
   constructor(options: {
     db: Database;
@@ -92,6 +99,11 @@ export class SnapshotService {
     this.settings = options.settings;
     this.clock = options.clock ?? systemClock;
     this.catalog = new AccountCatalog(this.db, this.clock);
+    this.leases = new InvocationLeaseStore(
+      this.db,
+      this.settings.leases,
+      this.clock,
+    );
     this.usageStore = new UsageStore({
       db: this.db,
       settings: this.settings.usage,
@@ -237,20 +249,23 @@ export class SnapshotService {
     if (options?.fetchUsage !== false) {
       await this.collectUsage({ rows });
     }
-    const now = this.clock();
-    const conflicts = identityConflictKeys(rows.filter((row) => row.present));
-    const usageStates = this.usageStore.readAll();
-    const policies = this.readPolicies();
+    const { accounts, sequence, lastSelected } = this.db.immediate(() => {
+      this.leases.expireStaleLocked();
+      return {
+        accounts: this.assembleViewsLocked(this.catalog.listAll()),
+        sequence: this.selectionSequenceLocked(),
+        lastSelected: this.activeAccountKey(),
+      };
+    });
 
-    const accounts = rows.map((row) =>
-      this.buildAccountView(
-        row,
-        usageStates.get(row.accountKey),
-        policies.get(row.accountKey) ?? DEFAULT_POLICY,
-        conflicts.has(row.accountKey),
-        now,
-      ),
-    );
+    const readOnlySelection = selectAccount({
+      accounts: accounts.filter((a) => a.present),
+      strategy: this.settings.selection.strategy,
+      settings: this.settings.selection,
+      allowUnknown: this.settings.selection.allowUnknown,
+      lastSelectedAccountKey: lastSelected,
+      sequence,
+    });
 
     return {
       schemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -260,9 +275,153 @@ export class SnapshotService {
         healthy: true,
       },
       canonicalCodexHome: resolveCodexHome(env),
-      recommendation: null,
+      recommendation:
+        readOnlySelection.kind === "selected"
+          ? {
+              accountKey: readOnlySelection.accountKey,
+              providerAccountId: readOnlySelection.providerAccountId,
+              strategy: readOnlySelection.reason.strategy,
+              reason: readOnlySelection.reason.summary,
+              headroomPercent: readOnlySelection.reason.headroomPercent,
+              activeLeases: readOnlySelection.reason.activeLeases,
+            }
+          : null,
       accounts,
     };
+  }
+
+  /**
+   * Assembles account views from current DB state. Must run inside an
+   * immediate transaction so lease counts and usage rows are one coherent
+   * read (build, selectReadOnly, and selectAndClaim all share this).
+   */
+  private assembleViewsLocked(rows: CatalogRow[]): SnapshotAccountView[] {
+    const now = this.clock();
+    const conflicts = identityConflictKeys(rows.filter((row) => row.present));
+    const usageStates = this.usageStore.readAll();
+    const policies = this.readPolicies();
+    const leaseCounts = this.leases.activeCountsLocked();
+    return rows.map((row) =>
+      this.buildAccountView(
+        row,
+        usageStates.get(row.accountKey),
+        policies.get(row.accountKey) ?? DEFAULT_POLICY,
+        conflicts.has(row.accountKey),
+        leaseCounts.get(row.accountKey) ?? 0,
+        now,
+      ),
+    );
+  }
+
+  private selectionSequenceLocked(): number {
+    const row = this.db.handle
+      .prepare("SELECT sequence FROM selection_state WHERE id = 1")
+      .get() as { sequence: number } | undefined;
+    return row?.sequence ?? 0;
+  }
+
+  /**
+   * Atomic selection + invocation claim (handoff §21.1): expire stale
+   * leases, read one coherent state, select, insert a reserved lease, and
+   * advance rotation state — all in one immediate transaction. Callers
+   * freshen usage (collectUsage) before invoking.
+   */
+  selectAndClaim(options: {
+    strategy: SelectionStrategy;
+    allowUnknown: boolean;
+    purpose: string;
+    cwd?: string | undefined;
+    /** Skip selection: claim this specific account (explicit targeting). */
+    forcedAccountKey?: string;
+  }): { result: SelectionResult; lease: InvocationLease | null } {
+    return this.db.immediate(() => {
+      this.leases.expireStaleLocked();
+      const rows = this.catalog.listAll();
+      const views = this.assembleViewsLocked(rows);
+
+      let result: SelectionResult;
+      if (options.forcedAccountKey !== undefined) {
+        const view = views.find((v) => v.accountKey === options.forcedAccountKey);
+        if (view === undefined) {
+          return {
+            result: {
+              kind: "none",
+              reason: "no_accounts",
+              nextReadyAt: null,
+              exclusions: [],
+            },
+            lease: null,
+          };
+        }
+        result = {
+          kind: "selected",
+          accountKey: view.accountKey,
+          providerAccountId: view.providerAccountId,
+          reason: {
+            strategy: options.strategy,
+            summary: "explicitly targeted account",
+            headroomPercent: view.selection.headroomPercent,
+            rawHeadroomPercent: view.selection.headroomPercent,
+            concurrencyPenaltyPercent: 0,
+            priority: view.policy.priority,
+            weight: view.policy.weight,
+            score: view.selection.headroomPercent ?? 0,
+            activeLeases: view.selection.activeLeases,
+            tieBreak: "none",
+          },
+          exclusions: [],
+        };
+      } else {
+        result = selectAccount({
+          accounts: views.filter((a) => a.present),
+          strategy: options.strategy,
+          settings: this.settings.selection,
+          allowUnknown: options.allowUnknown,
+          lastSelectedAccountKey: this.activeAccountKey(),
+          sequence: this.selectionSequenceLocked(),
+        });
+      }
+
+      if (result.kind !== "selected") {
+        return { result, lease: null };
+      }
+      const lease = this.leases.reserveLocked({
+        accountKey: result.accountKey,
+        purpose: options.purpose,
+        cwd: options.cwd,
+        selectorReason: result.reason,
+      });
+      this.db.handle
+        .prepare(
+          `INSERT INTO selection_state (id, sequence, last_selected_account_key, updated_at_ms)
+           VALUES (1, 1, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             sequence = sequence + 1,
+             last_selected_account_key = excluded.last_selected_account_key,
+             updated_at_ms = excluded.updated_at_ms`,
+        )
+        .run(result.accountKey, this.clock());
+      return { result, lease };
+    });
+  }
+
+  /** Read-only selection explanation — no lease, no rotation mutation. */
+  selectReadOnly(options: {
+    strategy: SelectionStrategy;
+    allowUnknown: boolean;
+  }): SelectionResult {
+    return this.db.immediate(() => {
+      this.leases.expireStaleLocked();
+      const views = this.assembleViewsLocked(this.catalog.listAll());
+      return selectAccount({
+        accounts: views.filter((a) => a.present),
+        strategy: options.strategy,
+        settings: this.settings.selection,
+        allowUnknown: options.allowUnknown,
+        lastSelectedAccountKey: this.activeAccountKey(),
+        sequence: this.selectionSequenceLocked(),
+      });
+    });
   }
 
   private buildAccountView(
@@ -270,6 +429,7 @@ export class SnapshotService {
     usage: UsageStateRow | undefined,
     policy: PolicyRow,
     identityConflict: boolean,
+    activeLeases: number,
     nowMs: number,
   ): SnapshotAccountView {
     const usageView = this.buildUsageView(usage, nowMs);
@@ -331,7 +491,7 @@ export class SnapshotService {
         eligible: exclusions.length === 0,
         exclusions,
         headroomPercent: headroom,
-        activeLeases: 0,
+        activeLeases,
       },
     };
   }
