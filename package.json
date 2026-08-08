@@ -1,0 +1,37 @@
+{
+  "name": "codex-swap",
+  "version": "0.1.0",
+  "description": "Multi-account balancing, smart usage tracking, and cross-account resumable history for the Codex CLI",
+  "type": "module",
+  "license": "MIT",
+  "author": "Mike Bannister",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "codex-swap": "./dist/cli/main.js"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "codex-multi-auth": "2.8.3",
+    "zod": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.0"
+  }
+}
