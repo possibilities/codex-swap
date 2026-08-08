@@ -34,6 +34,7 @@ import { runAuthCommand } from "./commands/auth.ts";
 import { runHistoryCommand } from "./commands/history.ts";
 import { runRunCommand } from "./commands/run.ts";
 import { runLeasesCommand } from "./commands/leases.ts";
+import { runResumeCommand } from "./commands/resume.ts";
 import { runSelectCommand } from "./commands/select.ts";
 import { runSnapshotCommand } from "./commands/snapshot.ts";
 import { runUsageCommand } from "./commands/usage.ts";
@@ -47,6 +48,7 @@ const commands = new Map<string, CommandHandler>([
   ["usage", runUsageCommand],
   ["select", runSelectCommand],
   ["run", runRunCommand],
+  ["resume", runResumeCommand],
   ["leases", runLeasesCommand],
   ["history", runHistoryCommand],
 ]);

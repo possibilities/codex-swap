@@ -23,6 +23,93 @@ account and never falls back to a different account. --strategy selects and
 claims atomically; --claim consumes a lease from 'codex-swap select --claim'.
 `;
 
+export type LaunchMode =
+  | { kind: "account"; selector: string }
+  | { kind: "strategy"; strategy: SelectionStrategy | null; allowUnknown: boolean }
+  | { kind: "claim"; leaseId: string };
+
+/** Shared lease-backed launch path for `run` and `resume`. */
+export async function executeLaunch(
+  mode: LaunchMode,
+  codexArgs: string[],
+  io: Io,
+): Promise<number> {
+  let service: SnapshotService | undefined;
+  try {
+    const adapter = createNdyAdapter();
+    service = await SnapshotService.open();
+
+    if (mode.kind === "claim") {
+      return await runWithExistingLease(service, adapter, mode.leaseId, codexArgs, io);
+    }
+    if (mode.kind === "account") {
+      return await runExplicit(service, adapter, mode.selector, codexArgs, io);
+    }
+    return await runWithStrategy(
+      service,
+      adapter,
+      mode.strategy ?? service.settings.selection.strategy,
+      mode.allowUnknown || service.settings.selection.allowUnknown,
+      codexArgs,
+      io,
+    );
+  } catch (error) {
+    const mapped = mapCommandError(error);
+    return emitFailure(io, mapped.error, mapped.exitCode);
+  } finally {
+    service?.close();
+  }
+}
+
+export interface ParsedLaunchFlags {
+  mode: LaunchMode | null;
+  error?: string;
+}
+
+export function parseLaunchMode(values: {
+  account?: string | undefined;
+  strategy?: string | undefined;
+  claim?: string | undefined;
+  allowUnknown: boolean;
+}): ParsedLaunchFlags {
+  const modes = [
+    values.account !== undefined,
+    values.strategy !== undefined,
+    values.claim !== undefined,
+  ].filter(Boolean).length;
+  if (modes > 1) {
+    return { mode: null, error: "--account, --strategy, and --claim are mutually exclusive" };
+  }
+  if (values.account !== undefined) {
+    if (values.account.length === 0) return { mode: null, error: "--account requires a value" };
+    return { mode: { kind: "account", selector: values.account } };
+  }
+  if (values.claim !== undefined) {
+    if (values.claim.length === 0) return { mode: null, error: "--claim requires a lease id" };
+    return { mode: { kind: "claim", leaseId: values.claim } };
+  }
+  if (values.strategy !== undefined) {
+    if (
+      values.strategy !== "" &&
+      values.strategy !== "best" &&
+      values.strategy !== "next-available"
+    ) {
+      return {
+        mode: null,
+        error: `unknown strategy '${values.strategy}' (expected best or next-available)`,
+      };
+    }
+    return {
+      mode: {
+        kind: "strategy",
+        strategy: values.strategy === "" ? null : values.strategy,
+        allowUnknown: values.allowUnknown,
+      },
+    };
+  }
+  return { mode: null };
+}
+
 export async function runRunCommand(args: string[]): Promise<number> {
   const { own, forwarded } = splitForwardedArgs(args);
 
@@ -46,75 +133,20 @@ export async function runRunCommand(args: string[]): Promise<number> {
   }
 
   const io = commandIo("run", false);
-  const modes = [
-    parsed.values.account !== undefined,
-    parsed.values.strategy !== undefined,
-    parsed.values.claim !== undefined,
-  ].filter(Boolean).length;
-  if (modes !== 1) {
+  const { mode, error } = parseLaunchMode({
+    account: parsed.values.account,
+    strategy: parsed.values.strategy,
+    claim: parsed.values.claim,
+    allowUnknown: parsed.values["allow-unknown"],
+  });
+  if (mode === null) {
+    if (error !== undefined) {
+      process.stderr.write(`codex-swap run: ${error}\n`);
+    }
     process.stderr.write(USAGE);
     return ExitCode.usage;
   }
-  const requestedStrategy = parsed.values.strategy;
-  if (
-    requestedStrategy !== undefined &&
-    requestedStrategy !== "" &&
-    requestedStrategy !== "best" &&
-    requestedStrategy !== "next-available"
-  ) {
-    return emitFailure(
-      io,
-      {
-        code: "INVALID_ARGUMENTS",
-        message: `unknown strategy '${requestedStrategy}' (expected best or next-available)`,
-        retryable: false,
-      },
-      ExitCode.usage,
-    );
-  }
-
-  let service: SnapshotService | undefined;
-  try {
-    const adapter = createNdyAdapter();
-    service = await SnapshotService.open();
-    const codexArgs = forwarded ?? [];
-
-    if (parsed.values.claim !== undefined) {
-      return await runWithExistingLease(
-        service,
-        adapter,
-        parsed.values.claim,
-        codexArgs,
-        io,
-      );
-    }
-    if (parsed.values.account !== undefined) {
-      return await runExplicit(
-        service,
-        adapter,
-        parsed.values.account,
-        codexArgs,
-        io,
-      );
-    }
-    const strategy: SelectionStrategy =
-      requestedStrategy === undefined || requestedStrategy === ""
-        ? service.settings.selection.strategy
-        : requestedStrategy;
-    return await runWithStrategy(
-      service,
-      adapter,
-      strategy,
-      parsed.values["allow-unknown"] || service.settings.selection.allowUnknown,
-      codexArgs,
-      io,
-    );
-  } catch (error) {
-    const mapped = mapCommandError(error);
-    return emitFailure(io, mapped.error, mapped.exitCode);
-  } finally {
-    service?.close();
-  }
+  return executeLaunch(mode, forwarded ?? [], io);
 }
 
 type Io = ReturnType<typeof commandIo>;
