@@ -29,9 +29,17 @@ Exit codes: 0 success · 1 failure · 2 usage · 3 no eligible account
             4 re-login required · 5 dependency unavailable · 130 interrupted
 `;
 
+import { runAuthCommand } from "./commands/auth.ts";
+import { runHistoryCommand } from "./commands/history.ts";
+import { runRunCommand } from "./commands/run.ts";
+
 type CommandHandler = (args: string[]) => Promise<number>;
 
-const commands = new Map<string, CommandHandler>();
+const commands = new Map<string, CommandHandler>([
+  ["auth", runAuthCommand],
+  ["run", runRunCommand],
+  ["history", runHistoryCommand],
+]);
 
 async function dispatch(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
