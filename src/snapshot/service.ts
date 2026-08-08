@@ -20,7 +20,8 @@ import {
 } from "../storage/install-secret.ts";
 import { dataRoot, databasePath } from "../storage/paths.ts";
 import { type Clock, systemClock, toIsoUtc } from "../util/clock.ts";
-import { UsageCollector, fixedPlanner, type PollPlanner } from "../usage/collector.ts";
+import { UsageCollector, adaptivePlanner, type PollPlanner } from "../usage/collector.ts";
+import { selectFetchSet } from "../usage/scheduler.ts";
 import {
   DEFAULT_USAGE_BASE_URL,
   DirectUsageProbe,
@@ -58,6 +59,9 @@ const DEFAULT_POLICY: PolicyRow = {
   maxConcurrent: null,
   cooldownUntilMs: null,
 };
+
+/** Bounded operator-initiated broader refresh (handoff §18.1). */
+const OPERATOR_REFRESH_BUDGET = 10;
 
 export class SnapshotService {
   readonly settings: Settings;
@@ -104,7 +108,11 @@ export class SnapshotService {
       store: this.usageStore,
       broker,
       probe,
-      planner: options.planner ?? fixedPlanner(this.settings.usage),
+      planner:
+        options.planner ??
+        adaptivePlanner(this.settings.usage, (accountKey) =>
+          accountKey === this.activeAccountKey() ? "active" : "candidate",
+        ),
       clock: this.clock,
     });
   }
@@ -165,10 +173,22 @@ export class SnapshotService {
     return this.catalog.listAll();
   }
 
+  /** The most recently selected account (selection_state), or null. */
+  activeAccountKey(): string | null {
+    const row = this.db.handle
+      .prepare(
+        "SELECT last_selected_account_key AS k FROM selection_state WHERE id = 1",
+      )
+      .get() as { k: string | null } | undefined;
+    return row?.k ?? null;
+  }
+
   /**
-   * Store-governed collection pass: reserve/fetch/record for each fetchable
-   * account. The store's claims, TTLs, backoff, and quarantine decide
-   * whether any single account actually produces a network request.
+   * Store-governed collection pass: reserve/fetch/record for each selected
+   * account. A normal scheduler pass respects the traffic invariant (the
+   * active account plus at most one due alternate, §18.1); an operator
+   * refresh (`force`) may go broader but stays bounded and still honors
+   * claims, backoff, and quarantine inside the store.
    */
   async collectUsage(options?: {
     rows?: CatalogRow[];
@@ -177,7 +197,7 @@ export class SnapshotService {
   }): Promise<void> {
     const rows = options?.rows ?? this.catalog.listAll();
     const conflicts = identityConflictKeys(rows.filter((r) => r.present));
-    let keys = rows
+    const fetchable = rows
       .filter(
         (row) =>
           row.present &&
@@ -185,9 +205,24 @@ export class SnapshotService {
           !conflicts.has(row.accountKey),
       )
       .map((row) => row.accountKey);
+
+    let keys: string[];
     if (options?.only !== undefined) {
       const allow = new Set(options.only);
-      keys = keys.filter((key) => allow.has(key));
+      keys = fetchable.filter((key) => allow.has(key));
+    } else if (options?.force === true) {
+      keys = fetchable.slice(0, OPERATOR_REFRESH_BUDGET);
+    } else {
+      const usageStates = this.usageStore.readAll();
+      keys = selectFetchSet(
+        fetchable.map((accountKey) => ({
+          accountKey,
+          usage: usageStates.get(accountKey),
+        })),
+        this.activeAccountKey(),
+        this.settings.usage,
+        this.clock(),
+      );
     }
     await this.collector.collect(keys, {
       ...(options?.force !== undefined ? { force: options.force } : {}),
@@ -312,6 +347,7 @@ export class SnapshotService {
       fetchedAt: null,
       ageSeconds: null,
       nextPollAt: null,
+      pollIntervalMs: null,
       lastError: null,
     };
     if (usage === undefined) return empty;
@@ -342,6 +378,9 @@ export class SnapshotService {
     }
     if (usage.nextPollAtMs !== null) {
       view.nextPollAt = toIsoUtc(usage.nextPollAtMs);
+    }
+    if (usage.pollIntervalMs !== null) {
+      view.pollIntervalMs = usage.pollIntervalMs;
     }
     if (usage.fetchedAtMs !== null) {
       view.fetchedAt = toIsoUtc(usage.fetchedAtMs);

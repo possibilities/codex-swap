@@ -3,6 +3,7 @@ import type { UsageSettings } from "../config/schema.ts";
 import type { Clock } from "../util/clock.ts";
 import { systemRng, type Rng } from "../util/rng.ts";
 import { UsageFetchError } from "./error-classifier.ts";
+import { planAfterSuccess, type PollRole } from "./poll-policy.ts";
 import type { UsageProbe } from "./probe.ts";
 import type {
   FetchClaim,
@@ -27,8 +28,7 @@ export interface PlanInput {
 
 export type PollPlanner = (input: PlanInput) => PollPlan;
 
-/** Milestone-3 planner: fixed candidate cadence with jitter; the adaptive
- * scheduler replaces this in the next milestone. */
+/** Fixed-cadence planner used by focused tests; production uses adaptivePlanner. */
 export function fixedPlanner(settings: UsageSettings, rng: Rng = systemRng, clock?: Clock): PollPlanner {
   return (input) => {
     const interval = Math.round(
@@ -38,6 +38,23 @@ export function fixedPlanner(settings: UsageSettings, rng: Rng = systemRng, cloc
     const now = clock !== undefined ? clock() : input.nowMs;
     return { nextPollAtMs: now + interval, pollIntervalMs: interval };
   };
+}
+
+/** Role-aware adaptive planner (handoff §18.3) — see poll-policy.ts. */
+export function adaptivePlanner(
+  settings: UsageSettings,
+  roleOf: (accountKey: string) => PollRole,
+  rng: Rng = systemRng,
+): PollPlanner {
+  return (input) =>
+    planAfterSuccess({
+      role: roleOf(input.accountKey),
+      previous: input.previous,
+      measurement: input.measurement,
+      nowMs: input.nowMs,
+      settings,
+      rng,
+    });
 }
 
 export interface CollectItem {

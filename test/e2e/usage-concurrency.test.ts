@@ -165,13 +165,20 @@ test("eight concurrent snapshots produce at most one request per account, then T
       (server.countsByAccount.get("acc_2") ?? 0) <= 1,
       `acc_2 fetched ${server.countsByAccount.get("acc_2")} times`,
     );
-    const afterStorm = server.totalRequests();
-    assert.ok(afterStorm <= 2, `total ${afterStorm} requests for two accounts`);
+    assert.ok(server.totalRequests() <= 2, "storm stayed within the pool size");
 
-    // A follow-up snapshot inside the serve TTL performs zero requests and
+    // One follow-up pass may bootstrap-fill the second account (one due
+    // alternate per pass); per-account budget still holds.
+    await runCli(["snapshot", "--json"], env);
+    assert.ok((server.countsByAccount.get("acc_1") ?? 0) <= 1);
+    assert.ok((server.countsByAccount.get("acc_2") ?? 0) <= 1);
+    const afterFill = server.totalRequests();
+    assert.equal(afterFill, 2, "both accounts measured exactly once in total");
+
+    // Inside the serve TTL a further snapshot performs zero requests and
     // serves decision-grade data.
     const followUp = await runCli(["snapshot", "--json"], env);
-    assert.equal(server.totalRequests(), afterStorm, "TTL suppressed refetch");
+    assert.equal(server.totalRequests(), afterFill, "TTL suppressed refetch");
     const envelope = JSON.parse(followUp.stdout) as SnapshotEnvelope;
     const acc1 = envelope.data.accounts.find((a) => a.accountKey === "record:r1");
     assert.equal(acc1?.usage.decisionGrade, true);
@@ -192,7 +199,9 @@ test("a failed refresh retains and labels last-good usage", async () => {
   try {
     const env = makeWorld(server.url);
 
-    const seed = await runCli(["usage", "--json"], env);
+    // Operator refresh seeds the whole pool (a plain scheduler pass would
+    // honor the active-plus-one-alternate traffic invariant instead).
+    const seed = await runCli(["usage", "refresh", "--json"], env);
     assert.equal(seed.code, 0, seed.stderr);
     assert.equal(server.totalRequests(), 2);
 

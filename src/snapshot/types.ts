@@ -35,6 +35,7 @@ export interface SnapshotUsageView {
   fetchedAt: string | null;
   ageSeconds: number | null;
   nextPollAt: string | null;
+  pollIntervalMs: number | null;
   lastError: {
     code: string;
     httpStatus: number | null;
