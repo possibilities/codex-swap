@@ -2,6 +2,8 @@
 import process from "node:process";
 import { ExitCode } from "./exit-codes.ts";
 import { packageInfo } from "../package-info.ts";
+import { logToFile } from "../logging/logger.ts";
+import { dataRoot } from "../storage/paths.ts";
 
 const HELP = `codex-swap — multi-account balancing for the Codex CLI
 
@@ -31,6 +33,8 @@ Exit codes: 0 success · 1 failure · 2 usage · 3 no eligible account
 
 import { runAccountsCommand } from "./commands/accounts.ts";
 import { runAuthCommand } from "./commands/auth.ts";
+import { runConfigCommand } from "./commands/config.ts";
+import { runDoctorCommand } from "./commands/doctor.ts";
 import { runHistoryCommand } from "./commands/history.ts";
 import { runRunCommand } from "./commands/run.ts";
 import { runLeasesCommand } from "./commands/leases.ts";
@@ -51,6 +55,8 @@ const commands = new Map<string, CommandHandler>([
   ["resume", runResumeCommand],
   ["leases", runLeasesCommand],
   ["history", runHistoryCommand],
+  ["doctor", runDoctorCommand],
+  ["config", runConfigCommand],
 ]);
 
 async function dispatch(argv: string[]): Promise<number> {
@@ -81,13 +87,29 @@ async function dispatch(argv: string[]): Promise<number> {
   return handler(rest);
 }
 
+const startedAt = Date.now();
 dispatch(process.argv.slice(2)).then(
   (code) => {
     process.exitCode = code;
+    logCompletion(code);
   },
   (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`codex-swap: ${message}\n`);
     process.exitCode = ExitCode.failure;
+    logCompletion(ExitCode.failure, message);
   },
 );
+
+function logCompletion(exitCode: number, errorMessage?: string): void {
+  const command = process.argv[2];
+  if (command === undefined) return;
+  logToFile(dataRoot(process.env), {
+    event: "command_completed",
+    level: exitCode === 0 ? "info" : "warn",
+    command,
+    exitCode,
+    durationMs: Date.now() - startedAt,
+    ...(errorMessage !== undefined ? { error: errorMessage } : {}),
+  });
+}

@@ -24,6 +24,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/**/*.test.ts\"",
+    "check:ndy": "node scripts/check-ndy-contract.mjs",
     "prepack": "npm run build"
   },
   "dependencies": {

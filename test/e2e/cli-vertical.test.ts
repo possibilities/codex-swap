@@ -21,6 +21,7 @@ const SECRET_B = "refresh-token-secret-BBB";
 function makeWorld(): { env: NodeJS.ProcessEnv; multiAuthDir: string; recordDir: string } {
   const multiAuthDir = mkdtempSync(path.join(os.tmpdir(), "cs-e2e-store-"));
   const recordDir = mkdtempSync(path.join(os.tmpdir(), "cs-e2e-rec-"));
+  const swapHome = mkdtempSync(path.join(os.tmpdir(), "cs-e2e-home-"));
   writeFileSync(
     path.join(multiAuthDir, "openai-codex-accounts.json"),
     JSON.stringify({
@@ -64,6 +65,11 @@ function makeWorld(): { env: NodeJS.ProcessEnv; multiAuthDir: string; recordDir:
     CODEX_SWAP_NDY_PACKAGE_DIR: FIXTURE_DIR,
     CODEX_MULTI_AUTH_DIR: multiAuthDir,
     FAKE_NDY_RECORD_DIR: recordDir,
+    // Sandbox ALL codex-swap state: without this, lease-backed commands
+    // write into the real platform data root.
+    CODEX_SWAP_HOME: swapHome,
+    CODEX_HOME: path.join(swapHome, "codex-home"),
+    CODEX_SWAP_UNSAFE_USAGE_BASE_URL: "http://127.0.0.1:1",
   };
   return { env, multiAuthDir, recordDir };
 }

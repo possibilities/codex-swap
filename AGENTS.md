@@ -17,11 +17,16 @@ docs, and tests.
 npm run typecheck   # tsc --noEmit over src + test
 npm test            # node --test, runs .ts directly via type stripping
 npm run build       # emit dist/ (tsc -p tsconfig.build.json)
+npm run check:ndy   # automated dependency-contract checks (handoff §34)
 ```
 
-Node >= 24 required. Tests must never touch the real `~/.codex`, the real ndy
-account store, or the network; they use `CODEX_SWAP_HOME` temp dirs and fake
-ndy binaries under `test/fixtures/`.
+Node >= 24 required. Tests must never touch the real `~/.codex`, the real
+ndy account store, the real codex-swap data root, or the network: every e2e
+world sets `CODEX_SWAP_HOME`, `CODEX_HOME`, `CODEX_MULTI_AUTH_DIR`, and
+`CODEX_SWAP_UNSAFE_USAGE_BASE_URL` to sandboxed values and uses the fake ndy
+package under `test/fixtures/fake-ndy/`. Every account fixture needs a
+distinct refreshToken (ndy merges same-token records on load) plus a fresh
+`expiresAt` so the broker never live-refreshes.
 
 ## Architecture
 

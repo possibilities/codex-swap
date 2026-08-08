@@ -192,6 +192,36 @@ test("non-finite numbers and non-object bodies fail without quoting content", ()
   }
 });
 
+test("additional rate-limit lanes carry their identity for consumers", () => {
+  // A codex-spark-style model lane: consumers label it as its own meter.
+  const measurement = parse({
+    plan_type: "plus",
+    rate_limit: {
+      primary_window: { used_percent: 10, limit_window_seconds: 18000 },
+    },
+    additional_rate_limits: [
+      {
+        limit_name: "gpt-5.3-codex-spark",
+        metered_feature: "codex_spark",
+        rate_limit: {
+          primary_window: { used_percent: 55, limit_window_seconds: 18000 },
+          secondary_window: { used_percent: 30, limit_window_seconds: 604800 },
+        },
+      },
+    ],
+  });
+  const spark = measurement.windows.filter((w) => w.limitName !== undefined);
+  assert.equal(spark.length, 2);
+  assert.equal(spark[0]?.limitName, "gpt-5.3-codex-spark");
+  assert.equal(spark[0]?.meteredFeature, "codex_spark");
+  assert.equal(spark[0]?.kind, "other");
+  assert.equal(spark[0]?.label, "5h");
+  assert.equal(spark[1]?.label, "weekly");
+  // General windows carry no lane identity, and lanes never bind selection.
+  assert.equal(measurement.windows[0]?.limitName, undefined);
+  assert.equal(bindingUsedPercent(measurement), 10);
+});
+
 test("unknown fields are tolerated", () => {
   const measurement = parse({
     plan_type: "pro",

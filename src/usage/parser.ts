@@ -82,6 +82,7 @@ function normalizeWindow(
   raw: z.infer<typeof wireWindow>,
   kind: UsageWindowKind,
   nowMs: number,
+  lane?: { limitName?: string | undefined; meteredFeature?: string | undefined },
 ): UsageWindow {
   const windowSeconds =
     raw.limit_window_seconds !== null &&
@@ -98,6 +99,12 @@ function normalizeWindow(
   };
   if (windowSeconds !== undefined) {
     window.windowSeconds = windowSeconds;
+  }
+  if (lane?.limitName !== undefined && lane.limitName.length > 0) {
+    window.limitName = lane.limitName;
+  }
+  if (lane?.meteredFeature !== undefined && lane.meteredFeature.length > 0) {
+    window.meteredFeature = lane.meteredFeature;
   }
   if (
     raw.reset_after_seconds !== null &&
@@ -177,12 +184,16 @@ export function parseUsageResponse(
     const kind: UsageWindowKind = isCodeReviewFeature(entry)
       ? "code_review"
       : "other";
+    const lane = {
+      limitName: entry.limit_name ?? undefined,
+      meteredFeature: entry.metered_feature ?? undefined,
+    };
     for (const raw of [
       entry.rate_limit?.primary_window,
       entry.rate_limit?.secondary_window,
     ]) {
       if (raw != null) {
-        windows.push(normalizeWindow(raw, kind, options.nowMs));
+        windows.push(normalizeWindow(raw, kind, options.nowMs, lane));
       }
     }
   }

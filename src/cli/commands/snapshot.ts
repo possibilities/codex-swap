@@ -4,11 +4,13 @@ import { commandIo, emitFailure, emitSuccess } from "../command-io.ts";
 import { mapCommandError } from "../errors.ts";
 import { ExitCode } from "../exit-codes.ts";
 
-const USAGE = `Usage: codex-swap snapshot [--json]
+const USAGE = `Usage: codex-swap snapshot [--no-fetch] [--json]
 
 One coherent account/usage/health snapshot — the primary machine-facing
 integration boundary. Repeated calls are safe: the usage store, not the
-caller, decides whether any network fetch happens.
+caller, decides whether any network fetch happens. --no-fetch skips the
+collection pass entirely and serves stored state only (cheap repaint reads
+for TUIs whose daemon owns fetching).
 `;
 
 export async function runSnapshotCommand(args: string[]): Promise<number> {
@@ -16,7 +18,10 @@ export async function runSnapshotCommand(args: string[]): Promise<number> {
   try {
     parsed = parseArgs({
       args,
-      options: { json: { type: "boolean", default: false } },
+      options: {
+        json: { type: "boolean", default: false },
+        "no-fetch": { type: "boolean", default: false },
+      },
       allowPositionals: false,
     });
   } catch (error) {
@@ -30,7 +35,9 @@ export async function runSnapshotCommand(args: string[]): Promise<number> {
   let service: SnapshotService | undefined;
   try {
     service = await SnapshotService.open();
-    const snapshot = await service.build();
+    const snapshot = await service.build(process.env, {
+      fetchUsage: !parsed.values["no-fetch"],
+    });
     emitSuccess(io, snapshot);
     if (!io.json) {
       process.stdout.write(

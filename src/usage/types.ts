@@ -23,6 +23,14 @@ export interface UsageWindow {
   /** ISO 8601 UTC. Derived from reset_at (unix seconds) or reset_after_seconds. */
   resetsAt?: string;
   resetAfterSeconds?: number;
+  /**
+   * Lane identity for windows sourced from additional_rate_limits (e.g. the
+   * codex-spark model lane), verbatim from the wire so consumers can render
+   * per-lane meters. Absent on general primary/secondary windows. These
+   * lanes never bind general selection headroom.
+   */
+  limitName?: string;
+  meteredFeature?: string;
 }
 
 export type ProbeKind = "direct-wham" | "direct-codex" | "header-probe";
