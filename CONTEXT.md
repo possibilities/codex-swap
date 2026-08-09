@@ -56,3 +56,16 @@ Codex homes.
 
 **Forced account** — An ephemeral account pin applied to one wrapper
 invocation. Never changes ndy's persisted active or pinned account.
+
+**Pi profile** — A per-account `PI_CODING_AGENT_DIR` under the codex-swap
+data root holding that account's own pi OAuth grant, with shared pi
+configuration symlinked from the canonical agent dir. The unit `pi run`
+pins through the environment.
+_Avoid_: sharing ndy tokens with pi; a profile is a separate grant.
+
+**Link** — The one-time verified association of a pool account with a pi
+profile: pi's `/login` runs inside the profile, and the resulting token's
+`chatgpt_account_id` claim must match the broker-derived claim of exactly
+one pool account (provider account ID as fallback) or nothing is stored.
+_Avoid_: matching identities by ndy `accountId` — workspace logins make it
+an org-style id while claims are account uuids.

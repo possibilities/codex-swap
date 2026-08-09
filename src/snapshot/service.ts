@@ -79,7 +79,13 @@ export class SnapshotService {
   private readonly clock: Clock;
   private readonly usageStore: UsageStore;
   private readonly collector: UsageCollector;
+  private readonly broker: CredentialBroker;
   readonly leases: InvocationLeaseStore;
+
+  /** Derived non-secret identity claim for one account (broker-mediated). */
+  async identityClaimId(accountKey: string): Promise<string | null> {
+    return this.broker.identityClaimId(accountKey);
+  }
 
   constructor(options: {
     db: Database;
@@ -109,7 +115,7 @@ export class SnapshotService {
       settings: this.settings.usage,
       clock: this.clock,
     });
-    const broker =
+    this.broker =
       options.broker ??
       new CredentialBroker({
         lineage: (token) => lineageHmac(this.secret, token),
@@ -118,7 +124,7 @@ export class SnapshotService {
     const probe = options.probe ?? new DirectUsageProbe({ clock: this.clock });
     this.collector = new UsageCollector({
       store: this.usageStore,
-      broker,
+      broker: this.broker,
       probe,
       planner:
         options.planner ??
@@ -333,11 +339,32 @@ export class SnapshotService {
     cwd?: string | undefined;
     /** Skip selection: claim this specific account (explicit targeting). */
     forcedAccountKey?: string;
+    /**
+     * Harness capability gate: accounts outside `keys` are excluded with
+     * `reason` (e.g. pi_profile_missing — quota alone cannot make an
+     * account launchable by a harness it was never linked to).
+     */
+    restrict?: { keys: ReadonlySet<string>; reason: AccountExclusionReason };
   }): { result: SelectionResult; lease: InvocationLease | null } {
     return this.db.immediate(() => {
       this.leases.expireStaleLocked();
       const rows = this.catalog.listAll();
-      const views = this.assembleViewsLocked(rows);
+      let views = this.assembleViewsLocked(rows);
+      if (options.restrict !== undefined) {
+        const { keys, reason } = options.restrict;
+        views = views.map((view) =>
+          keys.has(view.accountKey)
+            ? view
+            : {
+                ...view,
+                selection: {
+                  ...view.selection,
+                  eligible: false,
+                  exclusions: [...view.selection.exclusions, reason],
+                },
+              },
+        );
+      }
 
       let result: SelectionResult;
       if (options.forcedAccountKey !== undefined) {

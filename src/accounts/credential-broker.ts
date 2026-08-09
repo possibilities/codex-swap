@@ -88,6 +88,32 @@ export function isPermanentAuthFailure(failure: {
 const ACCESS_TOKEN_FRESHNESS_BUFFER_MS = 120_000;
 const REFRESH_TIMEOUT_MS = 20_000;
 
+/** Identity claim OpenAI's Codex-client access tokens carry. */
+const JWT_CLAIM_PATH = "https://api.openai.com/auth";
+
+/**
+ * Derived, non-secret identity fact from an access token: the
+ * `chatgpt_account_id` claim. Distinct from ndy's `accountId`, which for
+ * workspace logins is an org-style id — the claim is what both ndy's and
+ * pi's grants share for one underlying account. Claims-only decode (no
+ * verification, expiry ignored: an expired token still names its account).
+ */
+export function chatgptAccountIdClaim(accessToken: string): string | null {
+  const segments = accessToken.split(".");
+  if (segments.length !== 3 || segments[1] === undefined) return null;
+  try {
+    const json = Buffer.from(segments[1], "base64url").toString("utf8");
+    const payload: unknown = JSON.parse(json);
+    if (typeof payload !== "object" || payload === null) return null;
+    const claim = (payload as Record<string, unknown>)[JWT_CLAIM_PATH];
+    if (typeof claim !== "object" || claim === null) return null;
+    const accountId = (claim as Record<string, unknown>)["chatgpt_account_id"];
+    return typeof accountId === "string" && accountId.length > 0 ? accountId : null;
+  } catch {
+    return null;
+  }
+}
+
 async function productionDeps(env: NodeJS.ProcessEnv): Promise<BrokerDeps> {
   const [storage, auth] = await Promise.all([
     import("codex-multi-auth/storage"),
@@ -140,6 +166,22 @@ export class CredentialBroker {
     options?: { forceRefresh?: boolean },
   ): Promise<CredentialLeaseResult> {
     return this.acquireInner(accountKey, options?.forceRefresh === true, 0);
+  }
+
+  /**
+   * The stored access token's chatgpt_account_id claim, or null when no
+   * token is stored or the claim is unreadable. Read-only: never refreshes,
+   * never exposes token material.
+   */
+  async identityClaimId(accountKey: string): Promise<string | null> {
+    const deps = await this.depsPromise;
+    const store = await deps.loadAccounts();
+    const record = store?.accounts.find(
+      (r) => deriveAccountKey(r) === accountKey,
+    );
+    const accessToken = record?.accessToken;
+    if (accessToken === undefined || accessToken.length === 0) return null;
+    return chatgptAccountIdClaim(accessToken);
   }
 
   private async acquireInner(

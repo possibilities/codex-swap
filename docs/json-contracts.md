@@ -104,7 +104,8 @@ documented ones. `snapshot --json` is the primary integration boundary.
         "eligible": true,
         "exclusions": [],            // absent|ndy_disabled|manually_disabled|no_credentials|
                                      // relogin_required|identity_conflict|cooldown_active|
-                                     // usage_unknown|quota_exhausted|max_concurrent_reached
+                                     // usage_unknown|quota_exhausted|max_concurrent_reached|
+                                     // pi_profile_missing (pi-restricted selection only)
         "headroomPercent": 72,
         "activeLeases": 0
       }
@@ -127,6 +128,22 @@ accountKey, status, expiresAt} | null}`. A "none" result is an error
 envelope `NO_ELIGIBLE_ACCOUNT` (exit 3) whose `details` carry
 `{reason: all_exhausted|all_unknown|all_disabled|all_quarantined|no_accounts,
 nextReadyAt, exclusions: [{accountKey, exclusions[]}]}`.
+
+### pi status / pi unlink
+
+- `pi status --json`: `{pi: {binary, version|null}, canonicalAgentDir,
+  accounts: [{accountKey, email, linked, credentialPresent,
+  identityMatch: bool|null, profileDir|null}], orphanProfiles:
+  [{accountKey, email, profileDir}]}`. `identityMatch: false` means the
+  profile was verified for a different identity than the pool account now
+  carries — relink; `null` means no current claim is readable (missing ndy
+  token), so the link-time verification stands unchallenged. Orphans are
+  profiles whose account left the pool.
+- `pi unlink --account <selector> --json`: `{accountKey, removed: true,
+  profileDir}`.
+- `pi link` and `pi run` are interactive (a pi TUI inherits stdio) and have
+  no `--json` mode, like `run`/`resume`. Pi invocation leases carry purpose
+  `pi-session` in `leases --json`.
 
 ### accounts / usage / leases / history / doctor
 

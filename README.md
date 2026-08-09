@@ -52,6 +52,29 @@ codex-swap doctor
 codex-swap config set selection.defaultMaxConcurrent 2
 ```
 
+## Pi on the same account pool
+
+The pi coding agent can ride the same ChatGPT accounts (ADR 0005). Link each
+account once — pi runs `/login` inside a dedicated per-account profile, and
+the login's identity is verified against the pool before anything is stored —
+then launch pi exactly like Codex, under the same invocation leases:
+
+```sh
+codex-swap pi link                  # interactive; repeat per account
+codex-swap pi status
+codex-swap pi run --strategy best -- -p "hello"
+codex-swap pi run --account you@example.com -- --model gpt-5.2-codex
+codex-swap pi run --claim "$lease" -- …
+```
+
+Pi sessions stay in the canonical pi session store
+(`~/.pi/agent/sessions`), so any account resumes any session; shared pi
+configuration (extensions, skills, settings) is symlinked into every
+profile. Selection with `--strategy` only considers accounts with a linked,
+identity-verified profile (`pi_profile_missing` otherwise); quota comes from
+the same usage store as Codex launches, because quota is per account, not
+per OAuth grant.
+
 ## Balancing harness integration
 
 Selection is explainable and claimable. A read-only `select` never mutates
