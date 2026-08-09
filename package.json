@@ -25,6 +25,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/**/*.test.ts\"",
     "check:ndy": "node scripts/check-ndy-contract.mjs",
+    "generate:schema": "node scripts/generate-schema.ts",
     "prepack": "npm run build"
   },
   "dependencies": {

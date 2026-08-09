@@ -1,0 +1,235 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "codex-swap settings",
+  "description": "Settings for codex-swap, stored as settings.json in the codex-swap data root. Every field is optional: anything absent falls back to the documented default, and unknown fields are preserved on round trip. A file that fails validation produces a stderr diagnostic and safe defaults rather than an error.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Reserved for editor tooling: path or URL of the JSON Schema describing this file. Ignored by codex-swap.",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "default": 1,
+      "description": "Version of the settings file format.",
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "selection": {
+      "description": "How an account is chosen when none is forced.",
+      "default": {},
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "default": "best",
+          "description": "Default automatic selection strategy, overridable per invocation.",
+          "type": "string",
+          "enum": [
+            "best",
+            "next-available"
+          ]
+        },
+        "allowUnknown": {
+          "default": false,
+          "description": "Let accounts with unknown usage be selected automatically. They score as zero headroom, so any account with known headroom still wins. Equivalent to passing --allow-unknown on every invocation.",
+          "type": "boolean"
+        },
+        "concurrencyPenaltyPercent": {
+          "default": 10,
+          "description": "Headroom percentage points subtracted from an account's score for each of its active invocation leases, so work spreads across accounts instead of stacking on one.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "defaultMaxConcurrent": {
+          "default": null,
+          "description": "Fallback cap on simultaneous invocation leases per account, applied only to accounts with no maxConcurrent policy of their own. null means no cap.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": {}
+    },
+    "usage": {
+      "description": "Usage freshness, trust ceilings, and adaptive poll pacing.",
+      "default": {},
+      "type": "object",
+      "properties": {
+        "serveTtlMs": {
+          "default": 180000,
+          "description": "A measurement younger than this is fresh: it is served without a network request and is decision-grade regardless of poll state.",
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 9007199254740991
+        },
+        "normalTrustMaxAgeMs": {
+          "default": 3600000,
+          "description": "Age ceiling past which a deliberately stale measurement stops being decision-grade after a network, timeout, parse, or server failure. Also caps a Retry-After honored on a non-429 response.",
+          "type": "integer",
+          "minimum": 60000,
+          "maximum": 9007199254740991
+        },
+        "rateLimitTrustMaxAgeMs": {
+          "default": 7200000,
+          "description": "Age ceiling that applies instead after a 429. Longer than the normal ceiling because usage only rises within a rate-limit window, so last-good stays a conservative lower bound.",
+          "type": "integer",
+          "minimum": 60000,
+          "maximum": 9007199254740991
+        },
+        "fetchClaimTtlMs": {
+          "default": 90000,
+          "description": "How long one collector's claim to fetch an account's usage lasts, keeping concurrent processes from probing the same account at once.",
+          "type": "integer",
+          "minimum": 5000,
+          "maximum": 9007199254740991
+        },
+        "minimumIntervalMs": {
+          "default": 180000,
+          "description": "Floor on the adaptive poll interval. Movement tightens pacing to this and no further.",
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 9007199254740991
+        },
+        "activeDefaultIntervalMs": {
+          "default": 180000,
+          "description": "Starting poll interval for the active (most recently selected) account.",
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 9007199254740991
+        },
+        "activeMaximumIntervalMs": {
+          "default": 300000,
+          "description": "Ceiling the active account's interval widens toward while its usage is calm.",
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 9007199254740991
+        },
+        "candidateDefaultIntervalMs": {
+          "default": 300000,
+          "description": "Starting poll interval for candidate (non-active) accounts.",
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 9007199254740991
+        },
+        "candidateMaximumIntervalMs": {
+          "default": 600000,
+          "description": "Ceiling a candidate account's interval widens toward while its usage is calm.",
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 9007199254740991
+        },
+        "exhaustedIntervalMs": {
+          "default": 600000,
+          "description": "Floor on the poll interval for an account at or past its limit, holding exhausted accounts to a slow cadence.",
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 9007199254740991
+        },
+        "urgentIntervalMs": {
+          "default": 60000,
+          "description": "Poll interval for an active account whose binding window is past the near-exhaustion threshold and still rising. Suppressed while a 429 is recent.",
+          "type": "integer",
+          "minimum": 5000,
+          "maximum": 9007199254740991
+        },
+        "movementDeltaPercent": {
+          "default": 1,
+          "description": "Change in the binding window's used percentage that counts as movement. Movement halves the interval; calm widens it by half again toward the role ceiling.",
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 50
+        },
+        "jitterFraction": {
+          "default": 0.1,
+          "description": "Random spread applied to poll intervals and failure backoff, plus or minus this fraction, keeping processes and machines out of lockstep.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.5
+        },
+        "post429MinimumIntervalMs": {
+          "default": 360000,
+          "description": "Floor on the poll interval while a 429 is recent.",
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 9007199254740991
+        },
+        "post429MaximumIntervalMs": {
+          "default": 1800000,
+          "description": "Ceiling on the poll interval while a 429 is recent.",
+          "type": "integer",
+          "minimum": 60000,
+          "maximum": 9007199254740991
+        },
+        "recent429WindowMs": {
+          "default": 3600000,
+          "description": "How long after a 429 an account counts as recently rate-limited, applying post-429 pacing and suppressing urgent mode.",
+          "type": "integer",
+          "minimum": 60000,
+          "maximum": 9007199254740991
+        },
+        "resetSlackMs": {
+          "default": 60000,
+          "description": "Grace period added after a known future window reset before polling for the refreshed quota. A reset can only pull the next poll earlier, never later.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "retryAfterCapMs": {
+          "default": 3600000,
+          "description": "Upper bound on a Retry-After honored from a 429, so a malformed value cannot park an account indefinitely.",
+          "type": "integer",
+          "minimum": 60000,
+          "maximum": 9007199254740991
+        },
+        "probeFallback": {
+          "default": "disabled",
+          "description": "What to do when the direct usage endpoint is unavailable. 'disabled' returns a clear capability error; 'header-probe' falls back to a real inference request read for quota headers, which consumes quota.",
+          "type": "string",
+          "enum": [
+            "disabled",
+            "header-probe"
+          ]
+        }
+      },
+      "additionalProperties": {}
+    },
+    "leases": {
+      "description": "Invocation lease lifetimes.",
+      "default": {},
+      "type": "object",
+      "properties": {
+        "reservationTtlMs": {
+          "default": 30000,
+          "description": "How long a reserved invocation lease stays valid before its child process is marked running.",
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 9007199254740991
+        },
+        "heartbeatIntervalMs": {
+          "default": 30000,
+          "description": "How often a running invocation heartbeats its lease.",
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 9007199254740991
+        },
+        "runningExpiryMs": {
+          "default": 120000,
+          "description": "How long a running lease stays valid after its last heartbeat before another process may treat it as expired.",
+          "type": "integer",
+          "minimum": 5000,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": {}
+    }
+  },
+  "additionalProperties": {}
+}
