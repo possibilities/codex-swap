@@ -70,7 +70,7 @@ type Io = ReturnType<typeof commandIo>;
 async function piCliAvailable(io: Io): Promise<number | null> {
   try {
     const result = await runCapture(piBinary(), ["--version"], {
-      env: process.env,
+      env: { ...process.env, AGENTSURFACE_LAUNCH: "1" },
       timeoutMs: 15_000,
     });
     if (result.exitCode !== 0) {
@@ -188,6 +188,9 @@ async function linkCommand(args: string[]): Promise<number> {
       env: {
         ...process.env,
         PI_CODING_AGENT_DIR: staging,
+        // Already-routed sentinel: a shimmed `pi` must exec the real
+        // binary here, or the link flow would recurse into balancing.
+        AGENTSURFACE_LAUNCH: "1",
       },
     });
 
@@ -391,7 +394,7 @@ async function statusCommand(args: string[]): Promise<number> {
     let piVersion: string | null = null;
     try {
       const result = await runCapture(piBinary(), ["--version"], {
-        env: process.env,
+        env: { ...process.env, AGENTSURFACE_LAUNCH: "1" },
         timeoutMs: 15_000,
       });
       piVersion = result.exitCode === 0 ? result.stdout.trim() : null;
