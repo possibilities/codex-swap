@@ -3,22 +3,19 @@
 [![CI](https://github.com/possibilities/codex-swap/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/possibilities/codex-swap/actions/workflows/ci.yml)
 
 Multi-account balancing for the [Codex CLI](https://github.com/openai/codex):
-prompted account onboarding, secret-free machine-readable account and quota
-data, smart adaptive usage fetching, deterministic account selection with
-atomic invocation claims, and one canonical cross-account resumable session
-history.
+onboard several ChatGPT accounts, then launch Codex on whichever one still has
+quota. Every session resumes under any account.
 
 codex-swap is the data and invocation boundary for TUIs and balancing
-harnesses — it deliberately has no TUI of its own. It consumes
+harnesses, and deliberately has no TUI of its own. It consumes
 [`codex-multi-auth`](https://github.com/ndycode/codex-multi-auth) (pinned
-exactly) for OAuth onboarding, credential storage, and fail-hard
-per-invocation account pinning through its runtime proxy, and owns everything
-that makes the data trustworthy: the persisted usage store with fetch claims
-and fencing, adaptive poll plans, freshness/trust rules, selection policy,
-and heartbeated invocation leases.
+exactly) for OAuth onboarding, credential storage, and fail-hard per-invocation
+account pinning. It owns everything that makes the data trustworthy: the
+persisted usage store, adaptive poll plans, freshness and trust rules,
+selection policy, and heartbeated invocation leases.
 
-See `docs/handoff.md` for the full build contract, `docs/architecture.md`
-for the module map, `docs/json-contracts.md` for consumer schemas, and
+See `docs/handoff.md` for the full build contract, `docs/architecture.md` for
+the module map, `docs/json-contracts.md` for consumer schemas, and
 `docs/security.md` for the threat model.
 
 ## Requirements
@@ -57,9 +54,9 @@ codex-swap config set selection.defaultMaxConcurrent 2
 ## Pi on the same account pool
 
 The pi coding agent can ride the same ChatGPT accounts (ADR 0005). Link each
-account once — pi runs `/login` inside a dedicated per-account profile, and
-the login's identity is verified against the pool before anything is stored —
-then launch pi exactly like Codex, under the same invocation leases:
+account once, then launch pi exactly like Codex, under the same invocation
+leases. Linking runs pi's `/login` inside a dedicated per-account profile and
+verifies the resulting identity against the pool before storing anything.
 
 ```sh
 codex-swap pi link                  # interactive; repeat per account
@@ -69,13 +66,12 @@ codex-swap pi run --account you@example.com -- --model gpt-5.2-codex
 codex-swap pi run --claim "$lease" -- …
 ```
 
-Pi sessions stay in the canonical pi session store
-(`~/.pi/agent/sessions`), so any account resumes any session; shared pi
-configuration (extensions, skills, settings) is symlinked into every
-profile. Selection with `--strategy` only considers accounts with a linked,
-identity-verified profile (`pi_profile_missing` otherwise); quota comes from
-the same usage store as Codex launches, because quota is per account, not
-per OAuth grant.
+Pi sessions stay in the canonical pi session store (`~/.pi/agent/sessions`), so
+any account resumes any session, and shared pi configuration (extensions,
+skills, settings) is symlinked into every profile. `--strategy` only considers
+accounts with a linked, identity-verified profile (`pi_profile_missing`
+otherwise). Quota comes from the same store as Codex launches, because quota is
+per account, not per OAuth grant.
 
 ## Balancing harness integration
 
@@ -89,9 +85,10 @@ codex-swap run --claim "$lease" -- exec "task"
 ```
 
 Concurrent harnesses calling `select --claim` are serialized through SQLite
-immediate transactions: two simultaneous claims land on different accounts
-when capacity allows, and `policy.maxConcurrent` / `selection.defaultMaxConcurrent`
-caps are never exceeded. Crashed holders' leases expire by wall clock.
+immediate transactions. Two simultaneous claims land on different accounts when
+capacity allows, and the `policy.maxConcurrent` /
+`selection.defaultMaxConcurrent` caps are never exceeded. A crashed holder's
+lease expires by wall clock.
 
 `snapshot --json` performs a store-governed collection pass first (the
 active account plus at most one due alternate — polling stays flat as the
@@ -122,12 +119,12 @@ TUI repaints while a daemon owns fetching.
 ## Recovery
 
 - **Quarantined account** (two permanent refresh failures): re-login with
-  `codex-swap auth add` — a rotated credential lineage clears quarantine
+  `codex-swap auth add`. A rotated credential lineage clears quarantine
   automatically on the next reconcile.
-- **Corrupt or lost `codex-swap.db`**: safe to delete; it is derived
-  coordination state. Accounts live in ndy's store; the catalog, usage, and
-  leases rebuild on the next command. Deleting `install-secret.bin` only
-  resets lineage fingerprints (one spurious quarantine release).
+- **Corrupt or lost `codex-swap.db`**: safe to delete — it is derived
+  coordination state. Accounts live in ndy's store, and the catalog, usage, and
+  leases rebuild on the next command. Deleting `install-secret.bin` only resets
+  lineage fingerprints (one spurious quarantine release).
 - **Stuck leases or old events**: `codex-swap doctor --fix` expires stale
   leases and prunes finished leases/events. `doctor --json` reports stale
   claims, quarantine, ambiguous identities, and permission problems.
