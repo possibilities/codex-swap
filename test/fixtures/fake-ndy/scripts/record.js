@@ -20,6 +20,6 @@ export function recordInvocation(bin, argv) {
   }
   appendFileSync(
     path.join(dir, "invocations.jsonl"),
-    `${JSON.stringify({ bin, argv, env: envPicks, stdinIsTTY: Boolean(process.stdin.isTTY) })}\n`,
+    `${JSON.stringify({ bin, argv, pid: process.pid, env: envPicks, stdinIsTTY: Boolean(process.stdin.isTTY) })}\n`,
   );
 }

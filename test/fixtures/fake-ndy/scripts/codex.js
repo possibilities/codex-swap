@@ -19,7 +19,11 @@ if (mode === "fail-account") {
 if (mode === "hang") {
   process.on("SIGTERM", () => process.exit(143));
   process.on("SIGINT", () => process.exit(130));
-  setInterval(() => {}, 1000);
+  // Hangs until signalled, but never forever: the crash test kills only the
+  // parent, so this is deliberately orphaned and nothing is left to reap it.
+  // The ceiling is far longer than any test needs and short enough that a
+  // stray child cannot outlive a CI job.
+  setTimeout(() => process.exit(75), 60_000);
 } else {
   process.exit(Number(process.env.FAKE_NDY_CODEX_EXIT ?? "0"));
 }

@@ -119,12 +119,14 @@ async function runCli(
   });
 }
 
-function wrapperInvocations(recordDir: string): Array<{ bin: string; argv: string[] }> {
+function wrapperInvocations(
+  recordDir: string,
+): Array<{ bin: string; argv: string[]; pid?: number }> {
   try {
     return readFileSync(path.join(recordDir, "invocations.jsonl"), "utf8")
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { bin: string; argv: string[] })
+      .map((line) => JSON.parse(line) as { bin: string; argv: string[]; pid?: number })
       .filter((r) => r.bin === "codex");
   } catch {
     return [];
@@ -255,8 +257,10 @@ test("run --claim consumes a harness-claimed lease; invalid leases fail", async 
 
 test("a crashed run's lease expires instead of blocking capacity forever", async () => {
   const server = await startServer();
+  let recordDir: string | undefined;
   try {
     const world = makeWorld(server.url);
+    recordDir = world.recordDir;
     await runCli(["usage", "refresh", "--json"], world.env);
     world.env["FAKE_NDY_CODEX_MODE"] = "hang";
 
@@ -270,19 +274,23 @@ test("a crashed run's lease expires instead of blocking capacity forever", async
     }
     assert.ok(wrapperInvocations(world.recordDir).length > 0, "session started");
 
-    // Kill the whole process tree: no release path runs, exactly like a real
-    // crash. Windows has no negative-pid process-group signal, so taskkill is
-    // the equivalent tree operation there.
+    // Kill the run process itself and nothing else, so no release path can
+    // run — exactly like a real crash, where the parent dies mid-flight and
+    // whatever it launched is orphaned.
+    //
+    // Killing the whole tree instead looks equivalent and is not: on Windows
+    // `taskkill /T` reaps the child first, the parent lives long enough to
+    // see it exit, and it dutifully releases the lease as `failed`. That is
+    // a well-behaved shutdown, which is the opposite of what this test needs.
+    // The orphaned wrapper exits on its own ceiling (see the fake's hang mode).
     assert.ok(child.pid !== undefined);
     if (process.platform === "win32") {
-      const killed = spawnSync(
-        "taskkill",
-        ["/pid", String(child.pid), "/T", "/F"],
-        { stdio: "ignore" },
-      );
-      assert.equal(killed.status, 0, "taskkill terminated the crashed run tree");
+      const killed = spawnSync("taskkill", ["/pid", String(child.pid), "/F"], {
+        stdio: "ignore",
+      });
+      assert.equal(killed.status, 0, "taskkill terminated the crashed run");
     } else {
-      process.kill(-child.pid, "SIGKILL");
+      process.kill(child.pid, "SIGKILL");
     }
 
     delete world.env["FAKE_NDY_CODEX_MODE"];
@@ -316,6 +324,15 @@ test("a crashed run's lease expires instead of blocking capacity forever", async
     };
     assert.equal(remaining.data.leases.length, 0, "capacity fully recovered");
   } finally {
+    // The crash orphaned the wrapper on purpose; nothing else will reap it.
+    for (const call of recordDir === undefined ? [] : wrapperInvocations(recordDir)) {
+      if (call.pid === undefined) continue;
+      try {
+        process.kill(call.pid, "SIGKILL");
+      } catch {
+        // Already gone, which is the common case.
+      }
+    }
     await server.close();
   }
 });
