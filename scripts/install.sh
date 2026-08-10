@@ -92,13 +92,17 @@ install_ndy_fork() {
 
     # dist/ is generated and gitignored upstream, so a fresh clone has none.
     # Rebuild whenever HEAD moved past what the last successful build recorded.
+    # The stamp lives in codex-swap's own state, not in the dependency's
+    # checkout: leaving an untracked file there dirties a tree that is also
+    # where the upstream PR gets rebased and reviewed.
     local head build_stamp
     head="$(git -C "${NDY_CHECKOUT}" rev-parse HEAD)"
-    build_stamp="${NDY_CHECKOUT}/.codex-swap-build-stamp"
+    build_stamp="${STATE_DIR}/ndy-build-stamp"
     if [ ! -f "${NDY_CHECKOUT}/dist/index.js" ] ||
        [ "$(cat "${build_stamp}" 2>/dev/null || true)" != "${head}" ]; then
         note "building codex-multi-auth at ${head:0:8} (npm ci && npm run build)"
         ( cd "${NDY_CHECKOUT}" && HUSKY=0 npm ci --silent && HUSKY=0 npm run build --silent ) || return 1
+        mkdir -p "${STATE_DIR}"
         printf '%s' "${head}" > "${build_stamp}"
     fi
 
