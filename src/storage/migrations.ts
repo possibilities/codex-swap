@@ -133,19 +133,22 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 }
 
 export function applyMigrations(db: DatabaseSync, clock: Clock): void {
-  const current = appliedSchemaVersion(db);
-  for (const migration of MIGRATIONS) {
-    if (migration.version <= current) continue;
-    db.exec("BEGIN IMMEDIATE");
-    try {
+  // Acquire the writer lock before reading the version. Concurrent first-opens
+  // can otherwise all observe version 0, serialize only afterward, and replay
+  // the same CREATE TABLE migration against the winner's completed schema.
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = appliedSchemaVersion(db);
+    for (const migration of MIGRATIONS) {
+      if (migration.version <= current) continue;
       db.exec(migration.sql);
       db.prepare(
         "INSERT INTO schema_migrations (version, applied_at_ms) VALUES (?, ?)",
       ).run(migration.version, clock());
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
     }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
 }

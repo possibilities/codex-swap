@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -270,10 +270,20 @@ test("a crashed run's lease expires instead of blocking capacity forever", async
     }
     assert.ok(wrapperInvocations(world.recordDir).length > 0, "session started");
 
-    // SIGKILL the whole process group: no release path runs, exactly like a
-    // real crash.
+    // Kill the whole process tree: no release path runs, exactly like a real
+    // crash. Windows has no negative-pid process-group signal, so taskkill is
+    // the equivalent tree operation there.
     assert.ok(child.pid !== undefined);
-    process.kill(-child.pid, "SIGKILL");
+    if (process.platform === "win32") {
+      const killed = spawnSync(
+        "taskkill",
+        ["/pid", String(child.pid), "/T", "/F"],
+        { stdio: "ignore" },
+      );
+      assert.equal(killed.status, 0, "taskkill terminated the crashed run tree");
+    } else {
+      process.kill(-child.pid, "SIGKILL");
+    }
 
     delete world.env["FAKE_NDY_CODEX_MODE"];
     const immediately = await runCli(["leases", "--json"], world.env);

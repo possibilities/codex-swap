@@ -10,7 +10,12 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { profileDir, profileDirName, profilesRoot } from "../../src/pi/paths.ts";
+import {
+  piSpawnCommand,
+  profileDir,
+  profileDirName,
+  profilesRoot,
+} from "../../src/pi/paths.ts";
 import { readPiCodexIdentity } from "../../src/pi/profile-auth.ts";
 import {
   PROFILE_SCHEMA_VERSION,
@@ -36,6 +41,17 @@ test("profile dir names are stable, safe, and collision-free", () => {
   assert.match(a, /^account-org-abc-[0-9a-f]{8}$/);
   // Same sanitized prefix, different keys — the hash keeps them apart.
   assert.notEqual(profileDirName("account:org-abc"), profileDirName("account-org-abc"));
+});
+
+test("JavaScript pi overrides run through Node on every platform", () => {
+  assert.deepEqual(piSpawnCommand({ CODEX_SWAP_PI_BIN: "/tmp/fake-pi.js" }), {
+    command: process.execPath,
+    prefixArgs: ["/tmp/fake-pi.js"],
+  });
+  assert.deepEqual(piSpawnCommand({ CODEX_SWAP_PI_BIN: "/tmp/pi-bin" }), {
+    command: "/tmp/pi-bin",
+    prefixArgs: [],
+  });
 });
 
 test("skeleton symlinks shared children, is idempotent, keeps real files", () => {

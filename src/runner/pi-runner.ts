@@ -3,7 +3,7 @@ import type {
   InvocationLease,
   InvocationLeaseStore,
 } from "../selection/leases.ts";
-import { piBinary } from "../pi/paths.ts";
+import { piSpawnCommand } from "../pi/paths.ts";
 import { runLeased } from "./leased.ts";
 
 /**
@@ -27,12 +27,13 @@ export async function runLeasedPi(options: {
   cwd?: string | undefined;
 }): Promise<number> {
   const baseEnv = options.env ?? process.env;
+  const spawn = piSpawnCommand(baseEnv);
   return runLeased({
     leases: options.leases,
     lease: options.lease,
     heartbeatIntervalMs: options.heartbeatIntervalMs,
     launch: () =>
-      runInteractive(piBinary(baseEnv), options.args, {
+      runInteractive(spawn.command, [...spawn.prefixArgs, ...options.args], {
         env: {
           ...baseEnv,
           PI_CODING_AGENT_DIR: options.profileDir,
