@@ -42,6 +42,12 @@ codex-swap usage refresh            # operator-initiated broader refresh
 codex-swap run --strategy best -- exec "hello"
 codex-swap run --account you@example.com --
 
+# Resident app-servers: one per account, so a harness can address sessions
+# programmatically without a shared server billing everything to one account.
+codex-swap app-server check --json  # can this codex-multi-auth host one?
+codex-swap app-server run --account you@example.com --listen unix:///path/to.sock
+codex-swap app-server list          # run/resume attach to these automatically
+
 # Cross-account history: list every session, resume any UUID on any account.
 codex-swap history list
 codex-swap resume 5973b6c0-94b8-487b-a530-2aeb6098ae0e --account acc_other --
