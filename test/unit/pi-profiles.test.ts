@@ -28,6 +28,8 @@ import {
   writeProfileMeta,
 } from "../../src/pi/profiles.ts";
 
+const POSIX = process.platform !== "win32";
+
 function makeEnv(): NodeJS.ProcessEnv {
   return {
     CODEX_SWAP_HOME: mkdtempSync(path.join(os.tmpdir(), "cs-pi-home-")),
@@ -59,7 +61,11 @@ test("skeleton symlinks shared children, is idempotent, keeps real files", () =>
   const dir = profileDir("record:r1", env);
   ensureProfileSkeleton(dir, env);
 
-  assert.equal(statSync(dir).mode & 0o777, 0o700);
+  // Windows has no POSIX mode bits, and ensureProfileSkeleton skips the
+  // chmod there (src/storage/permissions.ts), so there is nothing to assert.
+  if (POSIX) {
+    assert.equal(statSync(dir).mode & 0o777, 0o700);
+  }
   for (const child of ["sessions", "extensions", "skills", "settings.json"]) {
     const link = path.join(dir, child);
     assert.ok(lstatSync(link).isSymbolicLink(), `${child} is a symlink`);
