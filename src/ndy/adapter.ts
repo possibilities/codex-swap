@@ -16,6 +16,7 @@ import {
 import {
   runCapture,
   runInteractive,
+  runServer,
   type InteractiveResult,
 } from "./spawn.ts";
 
@@ -185,9 +186,19 @@ export class NdyAdapter {
     const extra = options.args ?? [];
     assertNoForcedAccountOverride(extra);
     assertNoListenOverride(extra);
-    return this.runCodex({
-      accountSelector: options.accountSelector,
-      args: ["app-server", "--listen", options.listenUrl, ...extra],
+    const argv = [
+      this.installation.bins.codexWrapper,
+      "--account",
+      options.accountSelector,
+      "app-server",
+      "--listen",
+      options.listenUrl,
+      ...extra,
+    ];
+    // A server runs in its own process group so the whole tree dies with it;
+    // an orphaned grandchild would hold the socket against every restart.
+    return runServer(process.execPath, argv, {
+      env: this.env,
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
     });
   }

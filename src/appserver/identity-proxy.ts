@@ -1,5 +1,5 @@
 import net from "node:net";
-import { unlinkSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 
 /**
  * The identity proxy that fronts a pinned app-server (handoff §39.4).
@@ -41,6 +41,42 @@ const REWRITTEN_METHODS = new Set([
 
 export interface IdentityProxy {
   close: () => Promise<void>;
+}
+
+/**
+ * Removes a socket file left behind by a process that did not unlink it —
+ * a crash, a SIGKILL, a supervisor restarting faster than the old child
+ * exits. A bare unlink would be wrong: it would silently displace a server
+ * that is genuinely still serving. So connect first and only clear the path
+ * when nothing answers.
+ */
+export async function clearStaleSocket(socketPath: string): Promise<void> {
+  if (!existsSync(socketPath)) return;
+  const serving = await new Promise<boolean>((resolve) => {
+    const probe = net.connect(socketPath);
+    const settle = (answer: boolean): void => {
+      probe.destroy();
+      resolve(answer);
+    };
+    probe.once("connect", () => settle(true));
+    probe.once("error", () => settle(false));
+    probe.setTimeout(2_000, () => settle(true));
+  });
+  if (serving) {
+    throw new SocketInUseError(socketPath);
+  }
+  try {
+    unlinkSync(socketPath);
+  } catch {
+    /* raced with another cleaner; the bind below reports the real problem */
+  }
+}
+
+/** Raised when a socket path is held by a process that is still answering. */
+export class SocketInUseError extends Error {
+  constructor(socketPath: string) {
+    super(`${socketPath} is already serving; refusing to displace it`);
+  }
 }
 
 export async function startIdentityProxy(options: {
@@ -95,11 +131,7 @@ export async function startIdentityProxy(options: {
     upstream.on("close", teardown);
   });
 
-  try {
-    unlinkSync(options.publicSocketPath);
-  } catch {
-    /* no stale socket to clear */
-  }
+  await clearStaleSocket(options.publicSocketPath);
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

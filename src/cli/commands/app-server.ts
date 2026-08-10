@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import {
@@ -9,6 +9,7 @@ import {
 import { resolveAppServerCapability } from "../../appserver/capability.ts";
 import { renderRateLimits } from "../../appserver/identity.ts";
 import {
+  clearStaleSocket,
   startIdentityProxy,
   type AppServerIdentity,
   type IdentityProxy,
@@ -318,6 +319,23 @@ async function runRun(args: string[]): Promise<number> {
     const upstreamPath = upstreamSocketPath(publicPath);
     const upstreamUrl = `unix://${upstreamPath}`;
 
+    // Codex refuses to bind over a leftover socket file, and a supervisor that
+    // restarts faster than the old child exits leaves exactly that. Clear it
+    // only when nothing is answering there.
+    try {
+      await clearStaleSocket(upstreamPath);
+    } catch (error) {
+      return emitFailure(
+        io,
+        {
+          code: "APP_SERVER_SOCKET_BUSY",
+          message: error instanceof Error ? error.message : String(error),
+          retryable: true,
+        },
+        ExitCode.failure,
+      );
+    }
+
     const registry = new AppServerRegistry(service.database, service.leases, service.now);
     try {
       registry.register({
@@ -391,6 +409,11 @@ async function runRun(args: string[]): Promise<number> {
       });
     } finally {
       await proxy?.close();
+      try {
+        unlinkSync(upstreamPath);
+      } catch {
+        /* the child normally removes it; a leftover is cleared on next start */
+      }
       registered.deregister(listen.url, lease.leaseId);
     }
   } catch (error) {

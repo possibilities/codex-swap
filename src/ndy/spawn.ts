@@ -94,6 +94,83 @@ export function signalExitCode(signal: NodeJS.Signals): number {
 }
 
 /**
+ * Runs a long-lived server child in its own process group, and takes the
+ * whole group down on the way out.
+ *
+ * The wrapper spawns the real Codex server as a grandchild. Under
+ * `runInteractive` that grandchild can outlive us — an abrupt parent exit
+ * leaves it reparented to init, still holding its listening socket, and the
+ * next start finds the address permanently taken. A resident server is
+ * supervised and restarts often, so "often" is the operative word.
+ *
+ * Signalling the negated pid reaches every descendant, so the wrapper and the
+ * Codex process it launched both go. SIGINT is forwarded explicitly because a
+ * detached child is no longer in the terminal's foreground group.
+ */
+export async function runServer(
+  command: string,
+  args: string[],
+  options: {
+    env: NodeJS.ProcessEnv;
+    cwd?: string;
+  },
+): Promise<InteractiveResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      env: options.env,
+      cwd: options.cwd,
+      stdio: "inherit",
+      shell: false,
+      detached: true,
+    });
+
+    const killGroup = (signal: NodeJS.Signals): void => {
+      if (child.pid === undefined) return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        // The group is already gone, or we lost the race with its exit.
+      }
+    };
+    const forward = (signal: NodeJS.Signals) => (): void => killGroup(signal);
+    const onSigint = forward("SIGINT");
+    const onSigterm = forward("SIGTERM");
+    const onSighup = forward("SIGHUP");
+    const onExit = (): void => killGroup("SIGTERM");
+
+    process.on("SIGINT", onSigint);
+    process.on("SIGTERM", onSigterm);
+    process.on("SIGHUP", onSighup);
+    process.on("exit", onExit);
+
+    const cleanup = (): void => {
+      process.removeListener("SIGINT", onSigint);
+      process.removeListener("SIGTERM", onSigterm);
+      process.removeListener("SIGHUP", onSighup);
+      process.removeListener("exit", onExit);
+    };
+
+    child.on("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.on("close", (exitCode, signal) => {
+      // The wrapper may exit while the server it launched lingers; sweep the
+      // group before reporting, so the socket is free for the next start.
+      killGroup("SIGTERM");
+      cleanup();
+      if (exitCode !== null) {
+        resolve({ exitCode, signal });
+      } else if (signal !== null) {
+        resolve({ exitCode: signalExitCode(signal), signal });
+      } else {
+        resolve({ exitCode: 1, signal: null });
+      }
+    });
+  });
+}
+
+/**
  * Runs a child with fully inherited stdio (login prompts, Codex sessions).
  * SIGINT is left to the child (the whole foreground process group receives
  * it; we stay alive to report the child's exit). SIGTERM and SIGHUP are
