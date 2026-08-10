@@ -286,11 +286,22 @@ test("a crashed run's lease expires instead of blocking capacity forever", async
     }
 
     delete world.env["FAKE_NDY_CODEX_MODE"];
-    const immediately = await runCli(["leases", "--json"], world.env);
+    // What matters after a crash is that no release path ran: the lease is
+    // either still held or has aged out on its own, never released or failed.
+    // Asserting it is still *held* would be a race — `leases` expires stale
+    // rows before listing, and on a slow runner the running expiry can elapse
+    // between the kill and this query, which is the correct behavior arriving
+    // early rather than a regression.
+    const immediately = await runCli(["leases", "--all", "--json"], world.env);
     const active = JSON.parse(immediately.stdout) as {
-      data: { leases: Array<{ status: string }> };
+      data: { leases: Array<{ status: string; leaseId: string }> };
     };
-    assert.equal(active.data.leases.length, 1, "lease survives the crash briefly");
+    assert.equal(active.data.leases.length, 1, "the crashed run's lease is still on record");
+    const crashed = active.data.leases[0];
+    assert.ok(
+      crashed !== undefined && ["running", "reserved", "expired"].includes(crashed.status),
+      `a crash must not release its lease, got ${crashed?.status}`,
+    );
 
     await new Promise((r) => setTimeout(r, RUNNING_EXPIRY_MS + 1_200));
     const later = await runCli(["leases", "--all", "--json"], world.env);
