@@ -185,9 +185,15 @@ install_ndy_fork() {
         return 1
     fi
     local current
+    # Never move a checkout someone is working in. This is also where the
+    # upstream PR that retires this fork gets written, and switching branches
+    # under an author silently lands their next commit on the wrong ref —
+    # which is exactly what happened once. Refuse and say so instead.
     current="$(git -C "${NDY_CHECKOUT}" rev-parse --abbrev-ref HEAD)"
     if [ "${current}" != "${NDY_BRANCH}" ]; then
-        git -C "${NDY_CHECKOUT}" checkout --quiet "${NDY_BRANCH}" || return 1
+        printf 'codex-swap install: %s is on %s, not %s; leaving it there. Switch back to install.\n' \
+            "${NDY_CHECKOUT}" "${current}" "${NDY_BRANCH}" >&2
+        return 1
     fi
     git -C "${NDY_CHECKOUT}" merge --quiet --ff-only "fork/${NDY_BRANCH}" || {
         printf 'codex-swap install: %s cannot fast-forward to fork/%s; refusing.\n' \
