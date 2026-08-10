@@ -3,6 +3,7 @@ import {
   resolveExplicitSelector,
   wrapperSelectorFor,
 } from "../../accounts/selector.ts";
+import { AppServerRegistry } from "../../appserver/registry.ts";
 import { createNdyAdapter } from "../../ndy/adapter.ts";
 import { NdyStoreReader } from "../../ndy/store-reader.ts";
 import { runLeasedCodex } from "../../runner/codex-runner.ts";
@@ -151,6 +152,43 @@ export async function runRunCommand(args: string[]): Promise<number> {
 
 type Io = ReturnType<typeof commandIo>;
 
+/**
+ * Composes `--remote` when the leased account already has a resident
+ * app-server (handoff §39.5). The server is the process that bills the
+ * session, and it is pinned to this same account, so attaching keeps the
+ * billing identical to launching standalone while putting the session inside
+ * the resident server — where a bus bridge or any other app-server client can
+ * see it. With no server registered, the launch is byte-for-byte as before.
+ *
+ * The flag goes ahead of any forwarded subcommand because it is a global
+ * option; `resume <id>` still parses as the forwarded command behind it.
+ */
+function composeRemoteArgs(
+  service: SnapshotService,
+  accountKey: string,
+  codexArgs: string[],
+  io: Io,
+): string[] {
+  if (!service.settings.appServer.attachTui) return codexArgs;
+  // An explicit --remote from the caller always wins: they named a server.
+  if (codexArgs.some((arg) => arg === "--remote" || arg.startsWith("--remote="))) {
+    return codexArgs;
+  }
+  const registry = new AppServerRegistry(
+    service.database,
+    service.leases,
+    service.now,
+  );
+  const registration = registry.liveForAccount(accountKey);
+  if (registration === null) return codexArgs;
+  if (!io.json) {
+    process.stderr.write(
+      `codex-swap: attaching to the resident app-server at ${registration.listenUrl}\n`,
+    );
+  }
+  return ["--remote", registration.listenUrl, ...codexArgs];
+}
+
 async function runExplicit(
   service: SnapshotService,
   adapter: ReturnType<typeof createNdyAdapter>,
@@ -251,7 +289,7 @@ async function runExplicit(
     leases: service.leases,
     lease,
     accountSelector: wrapperSelector.selector,
-    args: codexArgs,
+    args: composeRemoteArgs(service, lease.accountKey, codexArgs, io),
     heartbeatIntervalMs: service.settings.leases.heartbeatIntervalMs,
   });
 }
@@ -315,7 +353,7 @@ async function runWithStrategy(
     leases: service.leases,
     lease,
     accountSelector: wrapperSelector.selector,
-    args: codexArgs,
+    args: composeRemoteArgs(service, lease.accountKey, codexArgs, io),
     heartbeatIntervalMs: service.settings.leases.heartbeatIntervalMs,
   });
 }
@@ -372,7 +410,7 @@ async function runWithExistingLease(
     leases: service.leases,
     lease,
     accountSelector: wrapperSelector.selector,
-    args: codexArgs,
+    args: composeRemoteArgs(service, lease.accountKey, codexArgs, io),
     heartbeatIntervalMs: service.settings.leases.heartbeatIntervalMs,
   });
 }

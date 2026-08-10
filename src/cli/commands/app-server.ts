@@ -1,9 +1,18 @@
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { parseArgs } from "node:util";
 import {
   resolveExplicitSelector,
   wrapperSelectorFor,
 } from "../../accounts/selector.ts";
 import { resolveAppServerCapability } from "../../appserver/capability.ts";
+import { renderRateLimits } from "../../appserver/identity.ts";
+import {
+  startIdentityProxy,
+  type AppServerIdentity,
+  type IdentityProxy,
+} from "../../appserver/identity-proxy.ts";
 import {
   AppServerRegistry,
   AppServerSocketBusyError,
@@ -14,6 +23,9 @@ import { NdyStoreReader } from "../../ndy/store-reader.ts";
 import { runLeased } from "../../runner/leased.ts";
 import { RESIDENT_LEASE_PURPOSE } from "../../selection/leases.ts";
 import { SnapshotService } from "../../snapshot/service.ts";
+import { ensurePrivateDir } from "../../storage/permissions.ts";
+import { dataRoot } from "../../storage/paths.ts";
+import type { UsageMeasurement } from "../../usage/types.ts";
 import { toIsoUtc } from "../../util/clock.ts";
 import { commandIo, emitFailure, emitSuccess, splitForwardedArgs } from "../command-io.ts";
 import { mapCommandError } from "../errors.ts";
@@ -66,6 +78,66 @@ export async function runAppServerCommand(args: string[]): Promise<number> {
       return ExitCode.usage;
   }
 }
+
+/**
+ * Where the wrapper's own server listens, behind the public socket. Kept
+ * short and inside the private data root: `sockaddr_un` allows about 100
+ * bytes, and the caller's path has already spent most of them.
+ */
+export function upstreamSocketPath(
+  publicPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const digest = createHash("sha256").update(publicPath).digest("hex").slice(0, 12);
+  const dir = path.join(dataRoot(env), "app-servers");
+  ensurePrivateDir(dir);
+  return path.join(dir, `${digest}.sock`);
+}
+
+function lastGoodMeasurement(
+  service: SnapshotService,
+  accountKey: string,
+): UsageMeasurement | null {
+  const row = service.store.readAll().get(accountKey);
+  if (row === undefined || row.lastGoodJson === null) return null;
+  try {
+    return JSON.parse(row.lastGoodJson) as UsageMeasurement;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Waits for the wrapped server to bind before fronting it. The rotation
+ * proxy takes a while to come up, so the deadline is generous; a child that
+ * dies first ends the wait immediately rather than burning it.
+ */
+async function armIdentityProxy(options: {
+  publicSocketPath: string;
+  upstreamSocketPath: string;
+  identity: AppServerIdentity;
+  isChildAlive: () => boolean;
+}): Promise<IdentityProxy | undefined> {
+  const deadline = Date.now() + UPSTREAM_WAIT_MS;
+  for (;;) {
+    if (!options.isChildAlive()) return undefined;
+    if (existsSync(options.upstreamSocketPath)) break;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `the app-server did not bind ${options.upstreamSocketPath} within ${UPSTREAM_WAIT_MS}ms`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return startIdentityProxy({
+    publicSocketPath: options.publicSocketPath,
+    upstreamSocketPath: options.upstreamSocketPath,
+    identity: options.identity,
+    onError: (message) => process.stderr.write(`codex-swap: ${message}\n`),
+  });
+}
+
+const UPSTREAM_WAIT_MS = 60_000;
 
 /** `unix://` is the only transport codex-swap registers and composes. */
 export function parseListenUrl(raw: string): { ok: true; url: string } | { ok: false; error: string } {
@@ -238,12 +310,21 @@ async function runRun(args: string[]): Promise<number> {
       );
     }
 
+    // The wrapper's server listens on a private socket; codex-swap owns the
+    // public one the caller named, so it can answer identity questions the
+    // proxied server cannot (handoff §39.4). The public path stays exactly
+    // what --listen said — the consumer's bridge addresses it by that name.
+    const publicPath = listen.url.slice("unix://".length);
+    const upstreamPath = upstreamSocketPath(publicPath);
+    const upstreamUrl = `unix://${upstreamPath}`;
+
     const registry = new AppServerRegistry(service.database, service.leases, service.now);
     try {
       registry.register({
         listenUrl: listen.url,
         accountKey: account.accountKey,
         leaseId: lease.leaseId,
+        upstreamListenUrl: upstreamUrl,
       });
     } catch (error) {
       service.leases.release(lease.leaseId, lease.ownerNonce, { status: "failed" });
@@ -263,19 +344,53 @@ async function runRun(args: string[]): Promise<number> {
     );
 
     const registered = registry;
+    const bound = service;
+    let proxy: IdentityProxy | undefined;
     try {
       return await runLeased({
         leases: service.leases,
         lease,
         heartbeatIntervalMs: service.settings.leases.heartbeatIntervalMs,
-        launch: () =>
-          adapter.runAppServer({
+        launch: () => {
+          const child = adapter.runAppServer({
             accountSelector: wrapperSelector.selector,
-            listenUrl: listen.url,
+            listenUrl: upstreamUrl,
             args: forwarded ?? [],
-          }),
+          });
+          let childAlive = true;
+          void child.finally(() => {
+            childAlive = false;
+          });
+          void armIdentityProxy({
+            publicSocketPath: publicPath,
+            upstreamSocketPath: upstreamPath,
+            identity: {
+              email: account.email ?? null,
+              planType: lastGoodMeasurement(bound, account.accountKey)?.planType ?? null,
+              rateLimits: () =>
+                renderRateLimits(lastGoodMeasurement(bound, account.accountKey)),
+            },
+            isChildAlive: () => childAlive,
+          })
+            .then((started) => {
+              proxy = started ?? undefined;
+              if (started !== undefined) {
+                process.stderr.write(
+                  `codex-swap: identity proxy serving ${listen.url}\n`,
+                );
+              }
+            })
+            .catch((error: unknown) => {
+              process.stderr.write(
+                `codex-swap: identity proxy did not start (${String(error)}); ` +
+                  `attached TUIs will see the server's own empty identity\n`,
+              );
+            });
+          return child;
+        },
       });
     } finally {
+      await proxy?.close();
       registered.deregister(listen.url, lease.leaseId);
     }
   } catch (error) {
