@@ -12,6 +12,17 @@ import type { Clock } from "../util/clock.ts";
  */
 export type LeaseStatus = "reserved" | "running" | "released" | "expired" | "failed";
 
+/**
+ * The lease purpose a resident, account-pinned app-server holds. Distinct
+ * from an interactive launch because the lifetimes differ in kind: one
+ * launch's lease ends with its Codex process, a resident lease lasts as long
+ * as the server stands by. Selection weighs them differently (handoff §39.3).
+ */
+export const RESIDENT_LEASE_PURPOSE = "app-server";
+
+/** The lease purpose an interactive `run`/`resume` launch holds. */
+export const CODEX_SESSION_LEASE_PURPOSE = "codex-session";
+
 export interface InvocationLease {
   leaseId: string;
   accountKey: string;
@@ -64,16 +75,43 @@ export class InvocationLeaseStore {
     return stale.length;
   }
 
-  /** Live (reserved or running, unexpired) lease counts per account. */
+  /**
+   * Live interactive lease counts per account — the ones that mean "somebody
+   * is burning this account's quota right now", so they drive the concurrency
+   * penalty and `maxConcurrent`. Resident leases are deliberately excluded;
+   * see `residentCountsLocked` (handoff §39.3).
+   */
   activeCountsLocked(): Map<string, number> {
     const now = this.clock();
     const rows = this.db.handle
       .prepare(
         `SELECT account_key, COUNT(*) AS n FROM invocation_leases
          WHERE status IN ('reserved', 'running') AND expires_at_ms > ?
+           AND purpose <> ?
          GROUP BY account_key`,
       )
-      .all(now) as Array<{ account_key: string; n: number }>;
+      .all(now, RESIDENT_LEASE_PURPOSE) as Array<{ account_key: string; n: number }>;
+    return new Map(rows.map((row) => [row.account_key, row.n]));
+  }
+
+  /**
+   * Live resident (app-server) lease counts per account. A resident pin says
+   * "this account has a server standing by", not "this account is busy": an
+   * idle app-server consumes nothing, and whatever its clients do consume
+   * arrives through ordinary usage observation. Counting it as concurrency
+   * would charge the same work twice and, with one server per account, would
+   * permanently exhaust any `maxConcurrent: 1` policy (handoff §39.3).
+   */
+  residentCountsLocked(): Map<string, number> {
+    const now = this.clock();
+    const rows = this.db.handle
+      .prepare(
+        `SELECT account_key, COUNT(*) AS n FROM invocation_leases
+         WHERE status IN ('reserved', 'running') AND expires_at_ms > ?
+           AND purpose = ?
+         GROUP BY account_key`,
+      )
+      .all(now, RESIDENT_LEASE_PURPOSE) as Array<{ account_key: string; n: number }>;
     return new Map(rows.map((row) => [row.account_key, row.n]));
   }
 

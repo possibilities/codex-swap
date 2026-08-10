@@ -183,6 +183,11 @@ export class SnapshotService {
     return this.usageStore;
   }
 
+  /** The service's clock, so collaborators share one notion of now. */
+  get now(): Clock {
+    return this.clock;
+  }
+
   async reconcile(): Promise<CatalogRow[]> {
     const redacted = await this.reader.loadRedactedAccounts({
       lineage: (token) => lineageHmac(this.secret, token),

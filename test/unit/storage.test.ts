@@ -59,7 +59,10 @@ test("open applies migrations, WAL mode, and private permissions", () => {
   db.close();
 
   const reopened = Database.open(dbPath, () => 2_000);
-  assert.equal(appliedSchemaVersion(reopened.handle), 1);
+  assert.equal(
+    appliedSchemaVersion(reopened.handle),
+    MIGRATIONS[MIGRATIONS.length - 1]?.version,
+  );
   reopened.close();
 });
 

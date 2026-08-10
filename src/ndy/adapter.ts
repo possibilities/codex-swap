@@ -59,6 +59,29 @@ export function assertNoForcedAccountOverride(args: string[]): void {
   }
 }
 
+/**
+ * Raised when forwarded app-server args carry their own `--listen`. Codex
+ * takes the last one, so a forwarded copy would move the server off the
+ * socket codex-swap registered and `run --remote` would compose a dead
+ * address.
+ */
+export class ListenConflictError extends Error {
+  constructor() {
+    super(
+      "forwarded app-server args must not contain --listen: codex-swap registers the socket " +
+        "it was given, and a second --listen would move the server off it",
+    );
+  }
+}
+
+export function assertNoListenOverride(args: string[]): void {
+  for (const arg of args) {
+    if (arg === "--listen" || arg.startsWith("--listen=")) {
+      throw new ListenConflictError();
+    }
+  }
+}
+
 export type LoginMode = "browser" | "device" | "manual";
 
 const MANAGER_JSON_TIMEOUT_MS = 60_000;
@@ -138,6 +161,33 @@ export class NdyAdapter {
     ];
     return runInteractive(process.execPath, argv, {
       env: this.env,
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+    });
+  }
+
+  /**
+   * Launches a resident, account-pinned Codex app-server through the same
+   * forced-account wrapper interactive launches use (handoff §39). The pin is
+   * what makes the server's model calls bill the intended account: the server
+   * process holds the credentials, and an attached client is only a client.
+   *
+   * Fail-hard exactly as `runCodex`: a refused pin propagates, never a retry
+   * without it. `listenUrl` is passed through byte-for-byte — codex-swap does
+   * not own the caller's socket layout.
+   */
+  async runAppServer(options: {
+    accountSelector: string;
+    listenUrl: string;
+    /** Extra Codex args forwarded after the transport flags. */
+    args?: string[];
+    cwd?: string;
+  }): Promise<InteractiveResult> {
+    const extra = options.args ?? [];
+    assertNoForcedAccountOverride(extra);
+    assertNoListenOverride(extra);
+    return this.runCodex({
+      accountSelector: options.accountSelector,
+      args: ["app-server", "--listen", options.listenUrl, ...extra],
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
     });
   }

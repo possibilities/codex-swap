@@ -117,6 +117,40 @@ CREATE TABLE events (
 CREATE INDEX events_time_idx ON events(occurred_at_ms DESC);
 `,
   },
+  {
+    version: 2,
+    sql: `
+-- Live app-server registrations (handoff §39). Liveness is derived from the
+-- owning resident lease rather than a second heartbeat: one process, one
+-- expiry story. The socket URL is the identity — two servers may share an
+-- account, but never a socket.
+CREATE TABLE app_servers (
+    listen_url TEXT PRIMARY KEY,
+    account_key TEXT NOT NULL REFERENCES accounts(account_key),
+    lease_id TEXT NOT NULL REFERENCES invocation_leases(lease_id),
+    upstream_listen_url TEXT,
+    owner_pid INTEGER,
+    started_at_ms INTEGER NOT NULL,
+    stopped_at_ms INTEGER
+);
+
+CREATE INDEX app_servers_account_idx
+    ON app_servers(account_key, stopped_at_ms);
+
+-- Cached answer to "can the resolved ndy host a canonical-home app-server?".
+-- Keyed by the wrapper's identity so a dependency change re-probes, because
+-- the answer is a property of that build, not of this machine.
+CREATE TABLE ndy_capability (
+    package_root TEXT PRIMARY KEY,
+    ndy_version TEXT NOT NULL,
+    wrapper_size INTEGER NOT NULL,
+    wrapper_mtime_ms INTEGER NOT NULL,
+    canonical_app_server INTEGER NOT NULL CHECK (canonical_app_server IN (0, 1)),
+    detail TEXT,
+    checked_at_ms INTEGER NOT NULL
+);
+`,
+  },
 ];
 
 export function appliedSchemaVersion(db: DatabaseSync): number {

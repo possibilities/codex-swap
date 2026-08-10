@@ -16,6 +16,7 @@ Commands:
   usage               Store-governed usage view
   select              Explain or atomically claim an account selection
   run                 Select/pin an account and launch Codex
+  app-server          Run a resident account-pinned Codex app-server
   pi                  Link accounts to pi profiles and launch pi balanced
   history             Provider-independent session list
   resume              Resume a session by ID under any usable account
@@ -33,6 +34,7 @@ Exit codes: 0 success · 1 failure · 2 usage · 3 no eligible account
 `;
 
 import { runAccountsCommand } from "./commands/accounts.ts";
+import { runAppServerCommand } from "./commands/app-server.ts";
 import { runAuthCommand } from "./commands/auth.ts";
 import { runConfigCommand } from "./commands/config.ts";
 import { runDoctorCommand } from "./commands/doctor.ts";
@@ -54,6 +56,7 @@ const commands = new Map<string, CommandHandler>([
   ["usage", runUsageCommand],
   ["select", runSelectCommand],
   ["run", runRunCommand],
+  ["app-server", runAppServerCommand],
   ["pi", runPiCommand],
   ["resume", runResumeCommand],
   ["leases", runLeasesCommand],
