@@ -238,27 +238,36 @@ test("history show forwards the exact session id", async () => {
   assert.equal(envelope.data.id, "11111111-2222-4333-8444-555555555555");
 });
 
-test("SIGTERM to codex-swap run is forwarded to the wrapper child", async () => {
-  const world = makeWorld();
-  world.env["FAKE_NDY_CODEX_MODE"] = "hang";
-  const child = spawn(
-    process.execPath,
-    [MAIN, "run", "--account", "record:r1", "--"],
-    { env: world.env, stdio: ["ignore", "pipe", "pipe"] },
-  );
-  const exit = new Promise<number>((resolve) => {
-    child.on("close", (code) => resolve(code ?? -1));
-  });
-  // Wait until the wrapper actually started before signaling.
-  for (let i = 0; i < 100; i++) {
-    if (invocations(world.recordDir).length > 0) break;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  assert.ok(invocations(world.recordDir).length > 0, "wrapper never started");
-  child.kill("SIGTERM");
-  const code = await exit;
-  assert.equal(code, 143, "child's SIGTERM exit must propagate");
-});
+test(
+  "SIGTERM to codex-swap run is forwarded to the wrapper child",
+  {
+    skip:
+      process.platform === "win32"
+        ? "Windows has no POSIX SIGTERM forwarding"
+        : false,
+  },
+  async () => {
+    const world = makeWorld();
+    world.env["FAKE_NDY_CODEX_MODE"] = "hang";
+    const child = spawn(
+      process.execPath,
+      [MAIN, "run", "--account", "record:r1", "--"],
+      { env: world.env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const exit = new Promise<number>((resolve) => {
+      child.on("close", (code) => resolve(code ?? -1));
+    });
+    // Wait until the wrapper actually started before signaling.
+    for (let i = 0; i < 100; i++) {
+      if (invocations(world.recordDir).length > 0) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(invocations(world.recordDir).length > 0, "wrapper never started");
+    child.kill("SIGTERM");
+    const code = await exit;
+    assert.equal(code, 143, "child's SIGTERM exit must propagate");
+  },
+);
 
 test("unsupported ndy version fails closed with exit 5", async () => {
   const world = makeWorld();

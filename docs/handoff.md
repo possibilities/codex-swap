@@ -143,10 +143,10 @@ Local research checkouts already exist at:
 ~/src/openai-codex
 ```
 
-The current Claude Swap worktree used as the benchmark is:
+The Claude Swap checkout used as the benchmark is:
 
 ```text
-/Users/arthack/orca/workspaces/claude-swap/menhaden
+~/src/claude-swap
 ```
 
 At research time, the installed environment reported:

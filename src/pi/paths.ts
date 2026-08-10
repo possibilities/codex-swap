@@ -58,3 +58,23 @@ export function piBinary(env: NodeJS.ProcessEnv = process.env): string {
   if (override !== undefined && override.length > 0) return override;
   return "pi";
 }
+
+export interface PiSpawnCommand {
+  command: string;
+  prefixArgs: string[];
+}
+
+/**
+ * Resolve the executable form of pi. An explicit JavaScript entry point is
+ * run through the current Node binary so the test/development override works
+ * on Windows as well as on platforms that honor shebangs.
+ */
+export function piSpawnCommand(
+  env: NodeJS.ProcessEnv = process.env,
+): PiSpawnCommand {
+  const binary = piBinary(env);
+  if (/\.(?:c|m)?js$/i.test(binary)) {
+    return { command: process.execPath, prefixArgs: [binary] };
+  }
+  return { command: binary, prefixArgs: [] };
+}

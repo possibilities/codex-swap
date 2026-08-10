@@ -4,7 +4,11 @@ import { resolveExplicitSelector } from "../../accounts/selector.ts";
 import { NdyStoreReader } from "../../ndy/store-reader.ts";
 import { matchPiIdentity, profileIdentityConsistent } from "../../pi/identity.ts";
 import { runCapture, runInteractive } from "../../ndy/spawn.ts";
-import { canonicalPiAgentDir, piBinary } from "../../pi/paths.ts";
+import {
+  canonicalPiAgentDir,
+  piBinary,
+  piSpawnCommand,
+} from "../../pi/paths.ts";
 import { readPiCodexIdentity } from "../../pi/profile-auth.ts";
 import {
   PROFILE_SCHEMA_VERSION,
@@ -69,10 +73,15 @@ type Io = ReturnType<typeof commandIo>;
 
 async function piCliAvailable(io: Io): Promise<number | null> {
   try {
-    const result = await runCapture(piBinary(), ["--version"], {
-      env: { ...process.env, AGENTSURFACE_LAUNCH: "1" },
-      timeoutMs: 15_000,
-    });
+    const spawn = piSpawnCommand();
+    const result = await runCapture(
+      spawn.command,
+      [...spawn.prefixArgs, "--version"],
+      {
+        env: { ...process.env, AGENTSURFACE_LAUNCH: "1" },
+        timeoutMs: 15_000,
+      },
+    );
     if (result.exitCode !== 0) {
       return emitFailure(
         io,
@@ -184,7 +193,8 @@ async function linkCommand(args: string[]): Promise<number> {
       ].join("\n"),
     );
 
-    await runInteractive(piBinary(), [], {
+    const spawn = piSpawnCommand();
+    await runInteractive(spawn.command, spawn.prefixArgs, {
       env: {
         ...process.env,
         PI_CODING_AGENT_DIR: staging,
@@ -393,10 +403,15 @@ async function statusCommand(args: string[]): Promise<number> {
     service = await SnapshotService.open();
     let piVersion: string | null = null;
     try {
-      const result = await runCapture(piBinary(), ["--version"], {
-        env: { ...process.env, AGENTSURFACE_LAUNCH: "1" },
-        timeoutMs: 15_000,
-      });
+      const spawn = piSpawnCommand();
+      const result = await runCapture(
+        spawn.command,
+        [...spawn.prefixArgs, "--version"],
+        {
+          env: { ...process.env, AGENTSURFACE_LAUNCH: "1" },
+          timeoutMs: 15_000,
+        },
+      );
       piVersion = result.exitCode === 0 ? result.stdout.trim() : null;
     } catch {
       piVersion = null;

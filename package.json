@@ -5,6 +5,10 @@
   "type": "module",
   "license": "MIT",
   "author": "Mike Bannister",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/possibilities/codex-swap.git"
+  },
   "engines": {
     "node": ">=24"
   },
