@@ -1,5 +1,7 @@
 # codex-swap
 
+[![CI](https://github.com/possibilities/codex-swap/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/possibilities/codex-swap/actions/workflows/ci.yml)
+
 Multi-account balancing for the [Codex CLI](https://github.com/openai/codex):
 prompted account onboarding, secret-free machine-readable account and quota
 data, smart adaptive usage fetching, deterministic account selection with
