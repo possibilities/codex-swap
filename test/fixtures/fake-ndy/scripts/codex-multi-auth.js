@@ -72,7 +72,7 @@ function emitJson(envName, fallback) {
 const command = args[0];
 
 if (args.length === 1 && (command === "--version" || command === "-v")) {
-  process.stdout.write("2.8.3\n");
+  process.stdout.write("2.8.4\n");
   process.exit(0);
 }
 

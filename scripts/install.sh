@@ -1,30 +1,21 @@
 #!/usr/bin/env bash
-# codex-swap installer. Owns two things: the managed codex-multi-auth fork
-# this project depends on, and the `codex-swap` command that points at it.
+# codex-swap installer. Owns the `codex-swap` command.
 #
-# The fork exists because stock codex-multi-auth 2.8.3 routes `app-server`
-# through an ephemeral shadow home, where a resident account-pinned server
-# cannot run (docs/handoff.md §39.1). The patch is one predicate and is
-# offered upstream; when a release carries it this whole provisioning step
-# collapses back to the npm dependency. Until then the fork is a first-class
-# managed install, the same shape agentusage uses for the claude-swap fork:
-# clone once, converge on fork/main by fast-forward only, and refuse rather
-# than clobber anything local.
+# It briefly also owned a managed codex-multi-auth fork, because 2.8.3 routed
+# `app-server` through an ephemeral shadow home where a resident
+# account-pinned server cannot run. 2.8.4 carries the fix upstream
+# (ndycode/codex-multi-auth#659), so the dependency is the exact npm pin again
+# and there is nothing to provision.
 #
-# Safe to re-run. Every step either converges or refuses; none destroys work.
+# Safe to re-run.
 set -uo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 BIN_DIR="${CODEX_SWAP_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 STATE_DIR="${CODEX_SWAP_INSTALL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/codex-swap}"
 RECEIPT="$STATE_DIR/install-receipt"
-NDY_CHECKOUT="${CODEX_SWAP_NDY_CHECKOUT:-$HOME/src/codex-multi-auth}"
-NDY_FORK_URL="${CODEX_SWAP_NDY_FORK_URL:-https://github.com/possibilities/codex-multi-auth.git}"
-NDY_UPSTREAM_URL="https://github.com/ndycode/codex-multi-auth.git"
-NDY_BRANCH="main"
 NDY_UPSTREAM_REMOTE="origin"
 NDY_UPSTREAM_BRANCH="main"
-FORK_LOG="${CODEX_SWAP_FORK_LOG:-$STATE_DIR/fork-rebase.log}"
 SHIM_MARKER="codex-swap-installer-owned:v1"
 # The shim agentusage used to write for this command. One command with two
 # owners races, so this installer takes it over when it sees that marker.
@@ -46,212 +37,12 @@ NODE_BIN="$(command -v node || true)"
 NODE_MAJOR="$("$NODE_BIN" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
 [ "$NODE_MAJOR" -ge 24 ] || die "node >= 24 is required (found $NODE_MAJOR)"
 
-# ── carrying the install branch forward ─────────────────────────────────────
-# Upstream keeps moving; a fork pinned to its own main quietly stops receiving
-# bugfixes and drifts until the patch it carries no longer applies. Every
-# install tries to replay that patch onto current upstream — but never at the
-# cost of the build that already works.
-#
-# `NDY_BRANCH` is the install branch: the integration of every patch we carry,
-# and the only ref this installer builds and binds. It is what gets rebased
-# here. A patch also offered upstream lives on its own branch, and rebasing the
-# install branch does NOT move it — keeping an open PR mergeable is a separate
-# operation against a different audience, and conflating the two would
-# force-push someone else's review context as a side effect of an install.
-#
-# The rebase happens in a scratch worktree, so the bound checkout is never left
-# mid-rebase or dirty, and the live branch is repointed only after the rebase,
-# the project's own CI gate, and the push have all succeeded. Any failure leaves
-# the previously bound version bound and tells the human, because a fork that
-# has silently stopped tracking upstream is the condition this exists to
-# surface.
-
-notify_fork() {
-    local title="$1" message="$2"
-    printf 'codex-swap install: %s\n' "${message}" >&2
-    mkdir -p "$(dirname "${FORK_LOG}")"
-    printf '%s  %s: %s\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${title}" "${message}" >>"${FORK_LOG}"
-    # A banner that never renders must not be the only record — the log above is
-    # written first and unconditionally. `-group` replaces a previous notice in
-    # place rather than stacking one per install.
-    command -v terminal-notifier >/dev/null 2>&1 || return 0
-    terminal-notifier -title "${title}" -message "${message}" \
-        -group codex-swap-fork-rebase >/dev/null 2>&1 || true
-}
-
-# Replay `branch` onto `remote/upstream_branch`, gate it, publish it, and rebind
-# the checkout to the result. Returns 0 when there was nothing to do or the whole
-# sequence succeeded, 1 when the human needs to look. The caller's ff-only
-# convergence must already have run, so HEAD is the fork's published tip on a
-# clean tree.
-rebase_fork_onto_upstream() {
-    local checkout="$1" branch="$2" remote="$3" upstream_branch="$4" label="$5"
-    shift 5
-    local upstream_ref="${remote}/${upstream_branch}"
-
-    if ! git -C "${checkout}" remote get-url "${remote}" >/dev/null 2>&1; then
-        note "${label} has no ${remote} remote; not tracking upstream"
-        return 0
-    fi
-    # An unreachable upstream is a network fact, not a fork problem: keep what
-    # works and stay quiet. Only a real divergence failure is worth a banner.
-    git -C "${checkout}" fetch --quiet "${remote}" "${upstream_branch}" 2>/dev/null || {
-        note "cannot reach ${upstream_ref}; keeping ${label} on its current base"
-        return 0
-    }
-    if git -C "${checkout}" merge-base --is-ancestor "${upstream_ref}" "${branch}"; then
-        note "${label} already carries ${upstream_ref}"
-        return 0
-    fi
-
-    local behind
-    behind="$(git -C "${checkout}" rev-list --count "${branch}..${upstream_ref}")"
-    note "${label} trails ${upstream_ref} by $([ "${behind}" -eq 1 ] && echo '1 commit' || echo "${behind} commits"); rebasing"
-
-    local work_tree work_branch
-    work_tree="$(mktemp -d "${TMPDIR:-/tmp}/${label}-rebase.XXXXXX")"
-    work_branch="rebase/${label}-$$"
-    rmdir "${work_tree}" 2>/dev/null || true
-    git -C "${checkout}" worktree add --quiet -b "${work_branch}" \
-        "${work_tree}" "${branch}" || {
-        notify_fork "${label} rebase" \
-            "could not create a scratch worktree; still on the previous build"
-        return 1
-    }
-
-    local failure=""
-    if ! git -C "${work_tree}" rebase --quiet "${upstream_ref}" >/dev/null 2>&1; then
-        git -C "${work_tree}" rebase --abort >/dev/null 2>&1 || true
-        failure="${label} conflicts with ${upstream_ref} and needs a hand"
-    elif ! ( cd "${work_tree}" && "$@" ); then
-        failure="${label} rebased onto ${upstream_ref} but its own gate failed"
-    elif ! git -C "${work_tree}" push --quiet --force-with-lease \
-        fork "HEAD:${branch}" >/dev/null 2>&1; then
-        failure="${label} passed its gate but could not publish to fork/${branch}"
-    fi
-
-    git -C "${checkout}" worktree remove --force "${work_tree}" >/dev/null 2>&1 || true
-    git -C "${checkout}" branch -D "${work_branch}" >/dev/null 2>&1 || true
-
-    if [ -n "${failure}" ]; then
-        notify_fork "${label} rebase" \
-            "${failure}. Left bound to the previous build; nothing was published."
-        return 1
-    fi
-
-    # Published history was rewritten, so the local branch no longer fast-forwards
-    # onto it. The tree was verified clean and HEAD was the old published tip, so
-    # there is nothing here to lose by taking the new one wholesale.
-    git -C "${checkout}" fetch --quiet fork "${branch}" || return 1
-    git -C "${checkout}" reset --quiet --hard "fork/${branch}" || return 1
-    note "${label} rebased onto ${upstream_ref} and published"
-}
-
-# ── the managed codex-multi-auth fork ───────────────────────────────────────
-# Returns non-zero without installing anything if the checkout cannot be
-# converged: a stale or hand-edited dependency is worse than none, because
-# codex-swap would silently launch app-servers that bill the wrong account.
-install_ndy_fork() {
-    if [ ! -d "${NDY_CHECKOUT}/.git" ]; then
-        note "cloning the codex-multi-auth fork into ${NDY_CHECKOUT}"
-        (( DRY )) && return 0
-        mkdir -p "$(dirname "${NDY_CHECKOUT}")"
-        git clone --quiet --origin fork --branch "${NDY_BRANCH}" \
-            "${NDY_FORK_URL}" "${NDY_CHECKOUT}" || return 1
-        # Upstream stays reachable as `origin` so the checkout is also where
-        # the PR keeping this fork small gets rebased and re-offered.
-        git -C "${NDY_CHECKOUT}" remote add origin "${NDY_UPSTREAM_URL}" 2>/dev/null || true
-    fi
-
-    local fork_url
-    fork_url="$(git -C "${NDY_CHECKOUT}" remote get-url fork 2>/dev/null || true)"
-    if [ -z "${fork_url}" ]; then
-        (( DRY )) || git -C "${NDY_CHECKOUT}" remote add fork "${NDY_FORK_URL}" || return 1
-    elif [ "${fork_url}" != "${NDY_FORK_URL}" ] &&
-         [ "${fork_url}" != "git@github.com:possibilities/codex-multi-auth.git" ] &&
-         [ "${fork_url}" != "https://github.com/possibilities/codex-multi-auth" ]; then
-        printf 'codex-swap install: %s remote fork points at %s, not %s; refusing.\n' \
-            "${NDY_CHECKOUT}" "${fork_url}" "${NDY_FORK_URL}" >&2
-        return 1
-    fi
-
-    (( DRY )) && { note "would converge ${NDY_CHECKOUT} on fork/${NDY_BRANCH}, rebase it onto ${NDY_UPSTREAM_REMOTE}/${NDY_UPSTREAM_BRANCH} if upstream moved, and build it"; return 0; }
-
-    git -C "${NDY_CHECKOUT}" fetch --quiet fork "${NDY_BRANCH}" || return 1
-    if [ -n "$(git -C "${NDY_CHECKOUT}" status --porcelain)" ]; then
-        printf 'codex-swap install: %s has local changes; refusing to install them.\n' \
-            "${NDY_CHECKOUT}" >&2
-        return 1
-    fi
-    local current
-    # Never move a checkout someone is working in. This is also where the
-    # upstream PR that retires this fork gets written, and switching branches
-    # under an author silently lands their next commit on the wrong ref —
-    # which is exactly what happened once. Refuse and say so instead.
-    current="$(git -C "${NDY_CHECKOUT}" rev-parse --abbrev-ref HEAD)"
-    if [ "${current}" != "${NDY_BRANCH}" ]; then
-        printf 'codex-swap install: %s is on %s, not %s; leaving it there. Switch back to install.\n' \
-            "${NDY_CHECKOUT}" "${current}" "${NDY_BRANCH}" >&2
-        return 1
-    fi
-    git -C "${NDY_CHECKOUT}" merge --quiet --ff-only "fork/${NDY_BRANCH}" || {
-        printf 'codex-swap install: %s cannot fast-forward to fork/%s; refusing.\n' \
-            "${NDY_CHECKOUT}" "${NDY_BRANCH}" >&2
-        return 1
-    }
-
-    # HEAD is now the fork's published tip on a clean tree — the precondition the
-    # rebase needs. The gate mirrors .github/workflows/ci.yml: install, typecheck,
-    # lint, test, build. It runs in the scratch worktree, so its node_modules and
-    # dist never touch the checkout this installer is about to build from. A
-    # failure is reported, never fatal: the build below proceeds from whatever
-    # this line left bound.
-    rebase_fork_onto_upstream "${NDY_CHECKOUT}" "${NDY_BRANCH}" \
-        "${NDY_UPSTREAM_REMOTE}" "${NDY_UPSTREAM_BRANCH}" "codex-multi-auth" \
-        env HUSKY=0 bash -c \
-        'npm ci --silent && npm run typecheck && npm run lint && npm run test && npm run build --silent' \
-        || true
-
-    # dist/ is generated and gitignored upstream, so a fresh clone has none.
-    # Rebuild whenever HEAD moved past what the last successful build recorded.
-    # The stamp lives in codex-swap's own state, not in the dependency's
-    # checkout: leaving an untracked file there dirties a tree that is also
-    # where the upstream PR gets rebased and reviewed.
-    local head build_stamp
-    head="$(git -C "${NDY_CHECKOUT}" rev-parse HEAD)"
-    build_stamp="${STATE_DIR}/ndy-build-stamp"
-    if [ ! -f "${NDY_CHECKOUT}/dist/index.js" ] ||
-       [ "$(cat "${build_stamp}" 2>/dev/null || true)" != "${head}" ]; then
-        note "building codex-multi-auth at ${head:0:8} (npm ci && npm run build)"
-        ( cd "${NDY_CHECKOUT}" && HUSKY=0 npm ci --silent && HUSKY=0 npm run build --silent ) || return 1
-        mkdir -p "${STATE_DIR}"
-        printf '%s' "${head}" > "${build_stamp}"
-    fi
-
-    [ -f "${NDY_CHECKOUT}/scripts/codex.js" ] || {
-        printf 'codex-swap install: %s has no scripts/codex.js after build; refusing.\n' \
-            "${NDY_CHECKOUT}" >&2
-        return 1
-    }
-    # The whole reason this fork exists. If the wrapper does not carry the
-    # canonical-home routing, installing it would hand codex-swap a dependency
-    # that fails `app-server check` anyway — say so here rather than at run time.
-    if ! grep -q 'isCodexAppServerCommand(rawArgs)' "${NDY_CHECKOUT}/scripts/codex.js" ||
-       ! grep -q 'useCanonicalHome' "${NDY_CHECKOUT}/scripts/codex.js"; then
-        printf 'codex-swap install: %s does not carry the app-server canonical-home fix; refusing.\n' \
-            "${NDY_CHECKOUT}" >&2
-        return 1
-    fi
-    note "codex-multi-auth fork ready at ${NDY_CHECKOUT} (${head:0:8})"
-}
-
 # ── the codex-swap command ──────────────────────────────────────────────────
 # A source shim rather than a build: this project runs its TypeScript directly
-# under Node's type stripping. The shim is also the one place that knows where
-# the managed fork lives, so every caller — including launchd-supervised
-# children that inherit nothing else — resolves it without plist plumbing. An
-# explicit CODEX_SWAP_NDY_PACKAGE_DIR still wins, for testing another build.
+# under Node's type stripping, so the command is a one-line exec into the
+# checkout and stays current without a rebuild step. The dependency resolves
+# from the exact npm pin; CODEX_SWAP_NDY_PACKAGE_DIR still overrides it for
+# testing another build.
 install_command() {
     local target="${BIN_DIR}/codex-swap"
     if [ -e "${target}" ] &&
@@ -266,16 +57,14 @@ install_command() {
     {
         printf '#!/usr/bin/env bash\n'
         printf '# %s\n' "${SHIM_MARKER}"
-        printf 'export CODEX_SWAP_NDY_PACKAGE_DIR="${CODEX_SWAP_NDY_PACKAGE_DIR:-%s}"\n' "${NDY_CHECKOUT}"
         printf 'exec %q %q "$@"\n' "${NODE_BIN}" "${ROOT}/src/cli/main.ts"
     } >"${temporary}"
     chmod 755 "${temporary}"
     mv -f "${temporary}" "${target}"
-    note "codex-swap -> ${ROOT} (codex-multi-auth: ${NDY_CHECKOUT})"
+    note "codex-swap -> ${ROOT}"
 }
 
 status=0
-install_ndy_fork || status=1
 install_command || status=1
 
 if (( DRY )); then
@@ -288,7 +77,6 @@ chmod 700 "${STATE_DIR}"
     printf '%s\n' "${SHIM_MARKER}"
     printf 'root=%s\n' "${ROOT}"
     printf 'bin=%s\n' "${BIN_DIR}"
-    printf 'ndy=%s\n' "${NDY_CHECKOUT}"
 } >"${RECEIPT}"
 chmod 600 "${RECEIPT}"
 

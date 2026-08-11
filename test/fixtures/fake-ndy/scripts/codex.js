@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fake codex-multi-auth-codex forced-account wrapper. Mirrors 2.8.3
+// Fake codex-multi-auth-codex forced-account wrapper. Mirrors 2.8.4
 // semantics that matter to codex-swap: --account/--account=<v> extraction,
 // fail-hard exit 1 without launching, and signal-driven exits.
 import { recordInvocation } from "./record.js";

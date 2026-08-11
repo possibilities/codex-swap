@@ -402,10 +402,10 @@ Use:
 Pin ndy exactly at the initially reviewed version:
 
 ```json
-"codex-multi-auth": "2.8.3"
+"codex-multi-auth": "2.8.4"
 ```
 
-Do not use `^2.8.3`. Dependency upgrades require the compatibility checklist later in this document.
+Do not use `^2.8.4`. Dependency upgrades require the compatibility checklist later in this document.
 
 If built-in SQLite proves incompatible with the minimum supported Node release, use `better-sqlite3` behind the same repository interface. Do not redesign storage around JSON merely to avoid one dependency: transactionality, cross-process claims, and invocation leases are core behavior.
 
@@ -1815,7 +1815,7 @@ Deliver:
 - ADRs 0001–0004 from the proposed layout;
 - strict TypeScript build;
 - package-local CLI entry point;
-- exact ndy 2.8.3 dependency and lockfile;
+- exact ndy 2.8.4 dependency and lockfile;
 - empty versioned JSON envelope and exit-code helpers;
 - CI for typecheck and tests on macOS, Linux, and Windows where available.
 
@@ -2366,7 +2366,7 @@ server per account instead.
 
 ### 39.1 What the gate established
 
-Verified against codex-cli 0.147.0 and codex-multi-auth 2.8.3 with two live
+Verified against codex-cli 0.147.0 and codex-multi-auth 2.8.3 (pre-fix) with two live
 accounts:
 
 - The forced-account wrapper forwards `app-server --listen unix://PATH`
@@ -2391,13 +2391,19 @@ Two defects surfaced, neither in codex-swap:
    drives threads against a frozen throwaway copy — the divergence that hung
    `resume` upstream (#647), held for the life of the process.
 
-   The fix is one predicate, carried on the codex-swap fork
-   (`possibilities/codex-multi-auth`, branch `fix/app-server-canonical-home`)
-   and offered upstream: classify `app-server` onto the canonical-home helper,
-   with `detachOnExit: false` because a resident server owns its proxy for its
-   whole lifetime, and `proxyAppServerAccountRead` threaded through so the
-   move does not silently drop the rewriting stdio clients rely on.
-   `app-server check` reports whether the resolved ndy carries it.
+   **Fixed upstream in 2.8.4** (ndycode/codex-multi-auth#659, landed by the
+   maintainer as #662): `app-server` is classified onto the canonical-home
+   helper, with `detachOnExit: false` because a resident server owns its proxy
+   for its whole lifetime, and `proxyAppServerAccountRead` set so the move does
+   not silently drop the rewriting stdio clients rely on. codex-swap ran on a
+   patch fork between 2026-08-10 and the 2.8.4 release; that fork is retired
+   and the dependency is the exact npm pin again.
+
+   `app-server check` still reports whether the resolved ndy carries the fix,
+   and still earns its keep: it matches the routing structurally rather than by
+   version, so it needed no change when the pin moved, and it keeps a
+   downgrade or a hand-swapped package from silently producing servers on the
+   wrong home.
 
 2. **A `--remote` TUI on a custom provider lands in the sign-in screen.** Any
    app-server whose `model_provider` has `requires_openai_auth = false`

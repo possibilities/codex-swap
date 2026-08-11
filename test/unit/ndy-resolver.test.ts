@@ -36,7 +36,7 @@ function writeFakePackage(overrides?: {
     path.join(dir, "package.json"),
     JSON.stringify({
       name: overrides?.name ?? "codex-multi-auth",
-      version: overrides?.version ?? "2.8.3",
+      version: overrides?.version ?? "2.8.4",
       bin: bins,
     }),
   );
@@ -45,7 +45,7 @@ function writeFakePackage(overrides?: {
 
 test("resolves the real package-local installation", () => {
   const installation = resolveNdyInstallation();
-  assert.equal(installation.version, "2.8.3");
+  assert.equal(installation.version, "2.8.4");
   assert.ok(installation.bins.manager.endsWith("codex-multi-auth.js"));
   assert.ok(installation.bins.codexWrapper.endsWith("codex.js"));
   assert.doesNotThrow(() => assertSupportedNdyVersion(installation));
@@ -87,7 +87,7 @@ test("version guard rejects untested versions with guidance", () => {
       error.installedVersion === "9.9.9" &&
       /docs\/handoff\.md/.test(error.message),
   );
-  assert.ok(SUPPORTED_NDY_VERSIONS.includes("2.8.3"));
+  assert.ok(SUPPORTED_NDY_VERSIONS.includes("2.8.4"));
 });
 
 test("containment env suppresses app-bind, launcher, statusline, and quota sweep", () => {

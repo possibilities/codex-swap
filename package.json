@@ -33,7 +33,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "codex-multi-auth": "2.8.3",
+    "codex-multi-auth": "2.8.4",
     "zod": "^4.4.0"
   },
   "devDependencies": {
