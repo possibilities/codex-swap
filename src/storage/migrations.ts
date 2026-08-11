@@ -151,6 +151,18 @@ CREATE TABLE ndy_capability (
 );
 `,
   },
+  {
+    version: 3,
+    sql: `
+-- An exclusive app-server belongs to exactly one session: 'run --server'
+-- starts it for the launch it fronts and tears it down with it. Attachment
+-- composition must never hand its socket to an unrelated launch, so
+-- liveForAccount skips exclusive rows; discovery consumers (app-server list)
+-- still see them.
+ALTER TABLE app_servers ADD COLUMN exclusive INTEGER NOT NULL DEFAULT 0
+    CHECK (exclusive IN (0, 1));
+`,
+  },
 ];
 
 export function appliedSchemaVersion(db: DatabaseSync): number {

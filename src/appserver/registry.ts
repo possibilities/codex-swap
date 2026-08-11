@@ -20,6 +20,9 @@ export interface AppServerRegistration {
   /** Where the ndy-wrapped server actually listens, behind the identity proxy. */
   upstreamListenUrl: string | null;
   ownerPid: number | null;
+  /** True for a server that serves exactly one session and dies with it;
+   * attachment composition never hands its socket to another launch. */
+  exclusive: boolean;
   startedAtMs: number;
   stoppedAtMs: number | null;
 }
@@ -45,6 +48,7 @@ export class AppServerRegistry {
     accountKey: string;
     leaseId: string;
     upstreamListenUrl?: string | undefined;
+    exclusive?: boolean | undefined;
   }): AppServerRegistration {
     const now = this.clock();
     return this.db.immediate(() => {
@@ -57,13 +61,14 @@ export class AppServerRegistry {
         .prepare(
           `INSERT INTO app_servers (
              listen_url, account_key, lease_id, upstream_listen_url,
-             owner_pid, started_at_ms, stopped_at_ms
-           ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+             owner_pid, exclusive, started_at_ms, stopped_at_ms
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
            ON CONFLICT(listen_url) DO UPDATE SET
              account_key = excluded.account_key,
              lease_id = excluded.lease_id,
              upstream_listen_url = excluded.upstream_listen_url,
              owner_pid = excluded.owner_pid,
+             exclusive = excluded.exclusive,
              started_at_ms = excluded.started_at_ms,
              stopped_at_ms = NULL`,
         )
@@ -73,11 +78,13 @@ export class AppServerRegistry {
           options.leaseId,
           options.upstreamListenUrl ?? null,
           process.pid,
+          options.exclusive === true ? 1 : 0,
           now,
         );
       recordEvent(this.db.handle, now, "app_server_registered", options.accountKey, {
         listenUrl: options.listenUrl,
         leaseId: options.leaseId,
+        exclusive: options.exclusive === true,
       });
       return {
         listenUrl: options.listenUrl,
@@ -85,6 +92,7 @@ export class AppServerRegistry {
         leaseId: options.leaseId,
         upstreamListenUrl: options.upstreamListenUrl ?? null,
         ownerPid: process.pid,
+        exclusive: options.exclusive === true,
         startedAtMs: now,
         stoppedAtMs: null,
       };
@@ -121,13 +129,18 @@ export class AppServerRegistry {
   }
 
   /**
-   * The live server for one account, if any. Deterministic when an account
-   * somehow has two: the most recently started wins, so a replacement started
-   * after a crash is preferred over the row the crash left behind.
+   * The live shared server for one account, if any. Exclusive servers are
+   * skipped: each belongs to the one session it fronts, and handing its
+   * socket to an unrelated launch would put a stranger's thread on it.
+   * Deterministic when an account somehow has two shared servers: the most
+   * recently started wins, so a replacement started after a crash is
+   * preferred over the row the crash left behind.
    */
   liveForAccount(accountKey: string): AppServerRegistration | null {
     return (
-      this.listLive().find((row) => row.accountKey === accountKey) ?? null
+      this.listLive().find(
+        (row) => row.accountKey === accountKey && !row.exclusive,
+      ) ?? null
     );
   }
 
@@ -188,6 +201,7 @@ function mapRow(raw: Record<string, unknown>): AppServerRegistration {
     leaseId: raw["lease_id"] as string,
     upstreamListenUrl: raw["upstream_listen_url"] as string | null,
     ownerPid: raw["owner_pid"] as number | null,
+    exclusive: raw["exclusive"] === 1,
     startedAtMs: raw["started_at_ms"] as number,
     stoppedAtMs: raw["stopped_at_ms"] as number | null,
   };

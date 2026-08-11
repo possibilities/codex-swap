@@ -219,6 +219,12 @@ export const settingsSchema = z.looseObject({
         .describe(
           "Launch run/resume against the leased account's resident app-server with --remote when one is registered. The server is pinned to the same account, so billing is unchanged; attaching puts the session where app-server clients can see it. Disable to always launch a standalone Codex.",
         ),
+      dedicated: z
+        .boolean()
+        .default(false)
+        .describe(
+          "Give every run/resume its own exclusive app-server by default — pinned to the leased account, torn down with the session — so a session's socket is its identity. Equivalent to passing --server auto on every launch; --server/--no-server override per launch. Falls back to a plain launch, saying so on stderr, only when no dedicated server can run at all.",
+        ),
     })
     .prefault({})
     .describe("Resident app-server behavior."),

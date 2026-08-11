@@ -2480,10 +2480,20 @@ When the leased account has a live registration, `run` and `resume` compose
 `--remote <listen-url>` ahead of any forwarded subcommand; with none, the
 launch is byte-for-byte what it was. Billing is unchanged either way — the
 server is pinned to the same account the lease names — but the session lands
-inside the resident server, where an app-server client can see it. The thread
-takes the *client's* working directory, not the server's, so attaching does
-not move a session out of its repository. `settings.appServer.attachTui`
-disables it; an explicit `--remote` from the caller always wins.
+inside the resident server, where an app-server client can see it.
+`settings.appServer.attachTui` disables it; an explicit `--remote` from the
+caller always wins.
+
+One earlier claim here proved wrong in the field: a remote-attached thread
+does **not** take the client's working directory. It records the *server's*
+unless the TUI passes an absolute `--cd` — `thread_cwd_from_config` in
+codex's `app_server_session.rs` sends only `remote_cwd_override` in Remote
+mode, and that override is the `-C/--cd` flag, absolute-only (agentsurface
+ADR 0023/0025; observed machine-wide as threads recording `/`, the
+launchd-started server's directory). Callers that care about the thread's
+recorded workspace must pass `--cd` themselves; a dedicated server (§39.7)
+additionally inherits the launch's own cwd, so its thread records the right
+directory even without one.
 
 ### 39.6 Account enumeration for supervisors
 
@@ -2493,3 +2503,36 @@ necessary but not sufficient: an account with no credentials or an
 upstream-invalidated login is present and enabled, and a server for it would
 fail its preflight on every restart. All three fields are already in the
 snapshot, so this needed no schema change.
+
+### 39.7 Dedicated servers: one session, one socket
+
+`run`/`resume --server <unix-url|auto>` gives the launch its own app-server
+instead of attaching to the account's shared one: a child
+`app-server run --exclusive --parent-pid <ours>` pinned to the leased
+account, waited for until its public socket answers (the identity proxy
+binds only after the wrapped server does, so connect-success is readiness),
+then the TUI attached with `--remote` and the server SIGTERMed when the TUI
+exits. The session's socket is thereby its *identity*: the one thread that
+appears on it can only be the session this launch started, which is what
+lets a consumer (agentsurface's run records, agentbus's bridge) correlate a
+codex thread to its launch deterministically, before any turn — the thing no
+shared-server heuristic could do (cwd joins, creation-time ordering, and env
+stamps all failed; see agentsurface's build context).
+
+Lifecycle is the process tree, not a supervisor: the server dies with the
+launch on every clean and signalled path, `--parent-pid` reaps the SIGKILL
+orphan within seconds, and the registry row was already lease-expired for
+the crash case. `exclusive` marks the registration so `liveForAccount` —
+the only composition-side reader — never hands one session's server to an
+unrelated launch; `app-server list` still shows it, because discovery is the
+point. `app-server threads --listen <url>` is the matching read:
+`thread/loaded/list` plus `thread/read` over a real RFC 6455 upgrade, the
+only pre-turn view of a codex session that exists.
+
+An explicit `--server unix://…` is fail-hard — the caller records that
+socket as the session's identity, and silently attaching to a shared server
+would reintroduce the ambiguity this exists to end. `auto` and the
+`appServer.dedicated` setting degrade to a plain launch, saying so on
+stderr, only when the capability probe says no server can run at all.
+Billing is untouched in every case: the dedicated server is pinned to the
+same account the lease names, exactly as a shared one is (§39.3).

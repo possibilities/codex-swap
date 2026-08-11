@@ -239,3 +239,35 @@ test("rate limits render into the shape Codex clients expect", () => {
   // Unknown usage passes the server's own answer through instead of inventing one.
   assert.equal(renderRateLimits(null), null);
 });
+
+test("an exclusive registration is listed but never composed onto another launch", () => {
+  const { db, leases, now } = world();
+  const registry = new AppServerRegistry(db, leases, now);
+  const dedicated = db.immediate(() =>
+    leases.reserveLocked({ accountKey: "record:a", purpose: RESIDENT_LEASE_PURPOSE }),
+  );
+  registry.register({
+    listenUrl: "unix:///tmp/run-1.sock",
+    accountKey: "record:a",
+    leaseId: dedicated.leaseId,
+    exclusive: true,
+  });
+
+  // Discovery consumers (the bus bridge) see the socket…
+  assert.equal(registry.listLive().length, 1);
+  assert.equal(registry.listLive()[0]?.exclusive, true);
+  // …but attachment composition never hands one session's server to another.
+  assert.equal(registry.liveForAccount("record:a"), null);
+
+  const shared = db.immediate(() =>
+    leases.reserveLocked({ accountKey: "record:a", purpose: RESIDENT_LEASE_PURPOSE }),
+  );
+  registry.register({
+    listenUrl: "unix:///tmp/shared.sock",
+    accountKey: "record:a",
+    leaseId: shared.leaseId,
+  });
+  // With both registered, only the shared one is attachable.
+  assert.equal(registry.liveForAccount("record:a")?.listenUrl, "unix:///tmp/shared.sock");
+  db.close();
+});

@@ -14,6 +14,7 @@ import {
   type AppServerIdentity,
   type IdentityProxy,
 } from "../../appserver/identity-proxy.ts";
+import { readLoadedThreads } from "../../appserver/probe.ts";
 import {
   AppServerRegistry,
   AppServerSocketBusyError,
@@ -32,9 +33,10 @@ import { commandIo, emitFailure, emitSuccess, splitForwardedArgs } from "../comm
 import { mapCommandError } from "../errors.ts";
 import { ExitCode } from "../exit-codes.ts";
 
-const USAGE = `Usage: codex-swap app-server run --account <selector> --listen <unix-url> [-- codex args...]
+const USAGE = `Usage: codex-swap app-server run --account <selector> --listen <unix-url> [--exclusive] [--parent-pid <pid>] [-- codex args...]
        codex-swap app-server check [--json] [--force]
        codex-swap app-server list [--json]
+       codex-swap app-server threads --listen <unix-url> [--json]
 
 Runs a resident Codex app-server pinned to one account. The account bound to
 the server process is the one that bills every session an attached client
@@ -43,12 +45,18 @@ drives, so a shared unpinned app-server would silently defeat balancing.
   run     Foreground child; holds a heartbeated resident lease for its
           lifetime, registers its socket so 'codex-swap run' can attach, and
           forwards SIGTERM/SIGHUP. The pin is fail-hard: a refused pin exits
-          rather than falling back to another account.
+          rather than falling back to another account. --exclusive marks the
+          registration as one session's own: attachment composition will
+          never hand its socket to another launch. --parent-pid names a
+          process whose death takes this server with it, so a wrapper killed
+          without cleanup cannot leave an orphan.
   check   Whether the resolved codex-multi-auth can host one at all. Exit 0
           when it can, ${ExitCode.dependencyUnavailable} with a reason when it cannot. Probe this before
           supervising servers: 'app-server --help' only says the surface
           exists, not that runs will work.
   list    Live registered app-servers and the accounts they are pinned to.
+  threads The threads a server currently holds, from thread/loaded/list plus
+          thread/read — the only pre-turn view of a codex session anywhere.
 `;
 
 export async function runAppServerCommand(args: string[]): Promise<number> {
@@ -72,6 +80,8 @@ export async function runAppServerCommand(args: string[]): Promise<number> {
       return runCheck(rest);
     case "list":
       return runList(rest);
+    case "threads":
+      return runThreads(rest);
     default:
       process.stderr.write(
         `codex-swap app-server: unknown subcommand '${subcommand}'\n${USAGE}`,
@@ -179,6 +189,8 @@ async function runRun(args: string[]): Promise<number> {
       options: {
         account: { type: "string" },
         listen: { type: "string" },
+        exclusive: { type: "boolean", default: false },
+        "parent-pid": { type: "string" },
       },
       allowPositionals: false,
     });
@@ -199,6 +211,16 @@ async function runRun(args: string[]): Promise<number> {
   if (!listen.ok) {
     process.stderr.write(`codex-swap app-server run: ${listen.error}\n`);
     return ExitCode.usage;
+  }
+  let parentPid: number | null = null;
+  if (parsed.values["parent-pid"] !== undefined) {
+    parentPid = Number.parseInt(parsed.values["parent-pid"], 10);
+    if (!Number.isInteger(parentPid) || parentPid <= 0) {
+      process.stderr.write(
+        `codex-swap app-server run: --parent-pid must be a positive integer (got '${parsed.values["parent-pid"]}')\n`,
+      );
+      return ExitCode.usage;
+    }
   }
 
   let service: SnapshotService | undefined;
@@ -343,6 +365,7 @@ async function runRun(args: string[]): Promise<number> {
         accountKey: account.accountKey,
         leaseId: lease.leaseId,
         upstreamListenUrl: upstreamUrl,
+        exclusive: parsed.values.exclusive,
       });
     } catch (error) {
       service.leases.release(lease.leaseId, lease.ownerNonce, { status: "failed" });
@@ -364,6 +387,25 @@ async function runRun(args: string[]): Promise<number> {
     const registered = registry;
     const bound = service;
     let proxy: IdentityProxy | undefined;
+    // A wrapper killed without cleanup (SIGKILL, OOM) cannot signal us; the
+    // watchdog notices the orphaning and self-terminates through the same
+    // signal path a clean shutdown uses, so nothing lingers on the socket.
+    let watchdog: ReturnType<typeof setInterval> | undefined;
+    if (parentPid !== null) {
+      const watched = parentPid;
+      watchdog = setInterval(() => {
+        try {
+          process.kill(watched, 0);
+        } catch {
+          process.stderr.write(
+            `codex-swap: parent ${watched} is gone; shutting the app-server down\n`,
+          );
+          process.kill(process.pid, "SIGTERM");
+          if (watchdog !== undefined) clearInterval(watchdog);
+        }
+      }, 5_000);
+      watchdog.unref();
+    }
     try {
       return await runLeased({
         leases: service.leases,
@@ -408,6 +450,7 @@ async function runRun(args: string[]): Promise<number> {
         },
       });
     } finally {
+      if (watchdog !== undefined) clearInterval(watchdog);
       await proxy?.close();
       try {
         unlinkSync(upstreamPath);
@@ -487,6 +530,58 @@ async function runCheck(args: string[]): Promise<number> {
   }
 }
 
+async function runThreads(args: string[]): Promise<number> {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args,
+      options: {
+        listen: { type: "string" },
+        json: { type: "boolean", default: false },
+      },
+      allowPositionals: false,
+    });
+  } catch (error) {
+    process.stderr.write(
+      `codex-swap app-server threads: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    return ExitCode.usage;
+  }
+  const listen = parseListenUrl(parsed.values.listen ?? "");
+  if (!listen.ok) {
+    process.stderr.write(`codex-swap app-server threads: ${listen.error}\n`);
+    return ExitCode.usage;
+  }
+
+  const io = commandIo("app-server threads", parsed.values.json);
+  try {
+    const threads = await readLoadedThreads(listen.url.slice("unix://".length));
+    emitSuccess(io, { listenUrl: listen.url, threads });
+    if (!io.json) {
+      if (threads.length === 0) {
+        process.stdout.write("no loaded threads\n");
+      } else {
+        for (const thread of threads) {
+          process.stdout.write(
+            `${thread.id}  ${thread.cwd ?? "-"}  ${thread.name ?? "-"}\n`,
+          );
+        }
+      }
+    }
+    return ExitCode.success;
+  } catch (error) {
+    return emitFailure(
+      io,
+      {
+        code: "APP_SERVER_UNREACHABLE",
+        message: `could not read threads from ${listen.url}: ${error instanceof Error ? error.message : String(error)}`,
+        retryable: true,
+      },
+      ExitCode.failure,
+    );
+  }
+}
+
 async function runList(args: string[]): Promise<number> {
   let parsed;
   try {
@@ -512,6 +607,7 @@ async function runList(args: string[]): Promise<number> {
       accountKey: row.accountKey,
       leaseId: row.leaseId,
       ownerPid: row.ownerPid,
+      exclusive: row.exclusive,
       startedAt: toIsoUtc(row.startedAtMs),
     }));
     emitSuccess(io, { appServers: live });
@@ -520,7 +616,9 @@ async function runList(args: string[]): Promise<number> {
         process.stdout.write("no live app-servers\n");
       } else {
         for (const row of live) {
-          process.stdout.write(`${row.listenUrl}  ${row.accountKey}  pid ${row.ownerPid ?? "?"}\n`);
+          process.stdout.write(
+            `${row.listenUrl}  ${row.accountKey}  pid ${row.ownerPid ?? "?"}${row.exclusive ? "  exclusive" : ""}\n`,
+          );
         }
       }
     }

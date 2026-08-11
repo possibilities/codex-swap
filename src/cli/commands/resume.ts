@@ -1,17 +1,20 @@
 import { parseArgs } from "node:util";
 import { commandIo, splitForwardedArgs } from "../command-io.ts";
 import { ExitCode } from "../exit-codes.ts";
-import { executeLaunch, parseLaunchMode } from "./run.ts";
+import { executeLaunch, parseLaunchMode, parseServerRequest } from "./run.ts";
 
-const USAGE = `Usage: codex-swap resume <session-id> --account <selector> -- [codex args...]
-       codex-swap resume <session-id> [--strategy [best|next-available]] [--allow-unknown] -- [codex args...]
-       codex-swap resume <session-id> --claim <lease-id> -- [codex args...]
+const USAGE = `Usage: codex-swap resume <session-id> --account <selector> [server options] -- [codex args...]
+       codex-swap resume <session-id> [--strategy [best|next-available]] [--allow-unknown] [server options] -- [codex args...]
+       codex-swap resume <session-id> --claim <lease-id> [server options] -- [codex args...]
 
 Resumes a session by explicit UUID under any usable account. Session IDs are
 account-independent: all sessions live in the one canonical CODEX_HOME, so a
 session created under account A resumes cleanly while pinned to account B.
 The explicit-UUID path bypasses Codex's provider-filtered interactive picker;
 'codex-swap history list' shows every resumable session across providers.
+Server options are run's: --server <unix-url|auto> resumes the thread on a
+dedicated exclusive app-server torn down with the session; --no-server forces
+a plain launch.
 `;
 
 const UUID_PATTERN =
@@ -29,6 +32,8 @@ export async function runResumeCommand(args: string[]): Promise<number> {
         strategy: { type: "string" },
         claim: { type: "string" },
         "allow-unknown": { type: "boolean", default: false },
+        server: { type: "string" },
+        "no-server": { type: "boolean", default: false },
       },
       allowPositionals: true,
     });
@@ -68,5 +73,18 @@ export async function runResumeCommand(args: string[]): Promise<number> {
   const launchMode =
     mode ?? { kind: "strategy" as const, strategy: null, allowUnknown: parsed.values["allow-unknown"] };
 
-  return executeLaunch(launchMode, ["resume", sessionId, ...(forwarded ?? [])], io);
+  const serverParsed = parseServerRequest({
+    server: parsed.values.server,
+    noServer: parsed.values["no-server"],
+  });
+  if ("error" in serverParsed) {
+    process.stderr.write(`codex-swap resume: ${serverParsed.error}\n${USAGE}`);
+    return ExitCode.usage;
+  }
+  return executeLaunch(
+    launchMode,
+    ["resume", sessionId, ...(forwarded ?? [])],
+    io,
+    serverParsed.request,
+  );
 }
