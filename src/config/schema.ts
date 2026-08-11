@@ -221,9 +221,9 @@ export const settingsSchema = z.looseObject({
         ),
       dedicated: z
         .boolean()
-        .default(false)
+        .default(true)
         .describe(
-          "Give every run/resume its own exclusive app-server by default — pinned to the leased account, torn down with the session — so a session's socket is its identity. Equivalent to passing --server auto on every launch; --server/--no-server override per launch. Falls back to a plain launch, saying so on stderr, only when no dedicated server can run at all.",
+          "Give every run/resume its own exclusive app-server — pinned to the leased account, torn down with the session — so a session's socket is its identity. On by default (ADR 0006); equivalent to passing --server auto on every launch, with --server/--no-server overriding per launch. Falls back to a plain launch, saying so on stderr, only when no dedicated server can run at all.",
         ),
     })
     .prefault({})
