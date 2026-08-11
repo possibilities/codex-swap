@@ -441,6 +441,17 @@ async function runRun(args: string[]): Promise<number> {
               }
             })
             .catch((error: unknown) => {
+              if (parsed.values.exclusive) {
+                // A dedicated server IS its public socket: without it, the
+                // session this server exists for can never attach. Dying now
+                // fails the launch fast instead of after its ready-wait.
+                process.stderr.write(
+                  `codex-swap: identity proxy did not start (${String(error)}); ` +
+                    `an exclusive server without its socket serves nobody — shutting down\n`,
+                );
+                process.kill(process.pid, "SIGTERM");
+                return;
+              }
               process.stderr.write(
                 `codex-swap: identity proxy did not start (${String(error)}); ` +
                   `attached TUIs will see the server's own empty identity\n`,
