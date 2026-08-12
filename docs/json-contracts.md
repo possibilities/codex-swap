@@ -66,7 +66,7 @@ documented ones. `snapshot --json` is the primary integration boundary.
 ```jsonc
 {
   "schemaVersion": 1,
-  "dependency": { "name": "codex-multi-auth", "version": "2.8.3", "healthy": true },
+  "dependency": { "name": "codex-multi-auth", "version": "2.8.4", "healthy": true },
   "canonicalCodexHome": "/Users/you/.codex",
   "recommendation": {            // null when nothing is eligible
     "accountKey": "record:…",

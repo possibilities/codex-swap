@@ -44,6 +44,7 @@ test("generated schema keeps settings.json optional and open", () => {
       `${name} must stay open to unknown fields`,
     );
   }
+  assert.ok(!("appServer" in sections), "app-server settings are retired");
 });
 
 test("$schema is inert: absent from defaults, harmless when malformed", () => {

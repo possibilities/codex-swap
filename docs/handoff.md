@@ -2353,195 +2353,28 @@ If implementation preserves that separation, the project can track upstream auth
 
 ---
 
-## 39. App-server surface: resident, account-pinned servers
+## 39. Retired app-server sidecars
 
-Added 2026-08-10, after the empirical gate described in §39.1. A balancing
-harness needs Codex sessions to live inside long-running app-servers a bus
-bridge can address, without giving up per-account billing. The account bound
-to the **app-server process** is the one that bills every session an attached
-client drives — the server makes the model calls; a TUI attached with
-`codex --remote unix://PATH` is only a client. A single shared, unpinned
-app-server therefore defeats balancing silently, so codex-swap runs one pinned
-server per account instead.
+Retired 2026-08-12. codex-swap no longer starts, registers, attaches, or
+proxies dedicated Codex app-server sidecars. The product boundary is back to
+the original one-shot data and invocation layer: `run`, `resume`, and
+`pi run` choose an account, take an invocation lease, and launch the native
+Codex or Pi process directly.
 
-### 39.1 What the gate established
+The removed surface included:
 
-Verified against codex-cli 0.147.0 and codex-multi-auth 2.8.3 (pre-fix) with two live
-accounts:
+- `codex-swap app-server run|check|list|threads`;
+- `run`/`resume --server`, `--no-server`, and automatic `--remote`
+  composition;
+- resident lease special-casing (`purpose: "app-server"`);
+- the app-server registry, ndy capability cache, identity proxy, and
+  dedicated server helper.
 
-- The forced-account wrapper forwards `app-server --listen unix://PATH`
-  byte-for-byte, and the pin governs the server's model calls. Proved by A/B:
-  each turn's rollout records the upstream `rate_limits` envelope, and pinning
-  to the Pro account produced its distinctive `codex_bengalfox` /
-  `GPT-5.3-Codex-Spark` window at 0%, while pinning to the Plus account
-  produced `limit_id: codex` at 32.0% with `resets_at` matching that account's
-  measured window exactly. `rotations: 0` throughout.
-- Rollouts land in the canonical `<CODEX_HOME>/sessions`, so §23.1 holds.
+Existing databases migrate by expiring any live `purpose: "app-server"`
+leases and dropping the retired registry/capability tables. The ordinary
+invocation lease table stays unchanged for Codex and Pi launches.
 
-Two defects surfaced, neither in codex-swap:
-
-1. **ndy 2.8.3 routes `app-server` through its ephemeral shadow home**, not the
-   canonical-home app-helper transport it already uses for the interactive
-   TUI, `resume`, and `fork`. A resident server cannot live there. Codex
-   refuses to start when `<CODEX_HOME>/app-server-control` exists and is not a
-   directory, and the shadow mirror symlinks it, so the child exits with
-   `socket directory path exists and is not a directory` on any home that has
-   ever run an app-server. A server that does start is worse off: the mirror
-   snapshots `state_N.sqlite`, the thread index, so every attached client
-   drives threads against a frozen throwaway copy — the divergence that hung
-   `resume` upstream (#647), held for the life of the process.
-
-   **Fixed upstream in 2.8.4** (ndycode/codex-multi-auth#659, landed by the
-   maintainer as #662): `app-server` is classified onto the canonical-home
-   helper, with `detachOnExit: false` because a resident server owns its proxy
-   for its whole lifetime, and `proxyAppServerAccountRead` set so the move does
-   not silently drop the rewriting stdio clients rely on. codex-swap ran on a
-   patch fork between 2026-08-10 and the 2.8.4 release; that wiring retired
-   with the release. The fork checkout is bound again as of 2026-08-11, for an
-   unrelated patch — the runtime helper leak, offered upstream as #664 — at
-   `~/src/codex-multi-auth@integration`, declared by `NDY_FORK_ACTIVE` in
-   `scripts/install.sh`. Nothing about the app-server routing depends on it.
-
-   `app-server check` still reports whether the resolved ndy carries the fix,
-   and still earns its keep: it matches the routing structurally rather than by
-   version, so it needed no change when the pin moved, and it keeps a
-   downgrade or a hand-swapped package from silently producing servers on the
-   wrong home.
-
-2. **A `--remote` TUI on a custom provider lands in the sign-in screen.** Any
-   app-server whose `model_provider` has `requires_openai_auth = false`
-   answers `getAuthStatus` with `authMethod: null` and `account/read` with
-   `account: null`, and the client concludes it is unauthenticated. This is
-   codex behaviour, reproducible with no ndy involved. ndy synthesizes those
-   replies already, but as a **stdio line rewriter**, inert under
-   `--listen unix://`. §39.4 is codex-swap's answer.
-
-### 39.2 The surface
-
-```text
-codex-swap app-server run --account <selector> --listen <unix-url> [-- codex args]
-codex-swap app-server check [--json] [--force]
-codex-swap app-server list [--json]
-```
-
-`run` is a foreground child with signal forwarding, launched exactly the way
-`adapter.runCodex` pins interactive launches: the package-local wrapper with
-`--account`, the containment environment, canonical `CODEX_HOME`, argument
-arrays. The pin is fail-hard per §22 — a refused pin propagates and the lease
-is marked failed, never a retry without it. `--listen` must be an absolute
-`unix://` path: codex-swap never places a server on the implicit default
-socket, where an unwrapped `codex` would attach to an arbitrary account.
-
-`app-server --help` exits 0, which is the probe the deployed agentbus
-supervisor shipped with. It answers "the surface exists", which is not the
-same question as "runs will work" — on an ndy without the §39.1 fix those
-differ — so `check` exists to answer the second one: exit 0 when the resolved
-ndy can host a canonical-home server, exit 5 with a named reason when it
-cannot. The answer is cached against the wrapper's size and mtime, because it
-is a property of that ndy build rather than of the machine, and the supervisor
-asks on every poll.
-
-### 39.3 Why residents hold a different kind of lease
-
-An invocation lease says "this account is likely consuming capacity" (§21.3).
-A resident app-server does not fit that: it may stand by for hours consuming
-nothing, and whatever its clients do consume already reaches codex-swap
-through ordinary usage observation.
-
-So a resident server takes a lease with `purpose: "app-server"`, heartbeated
-by the running `app-server run` process for its lifetime and released on every
-exit path, and `activeCountsLocked` excludes that purpose. Resident counts are
-available separately. Two reasons:
-
-- **Double counting.** Penalizing the pin *and* observing the usage charges
-  the same work twice, and the observation is the trustworthy half.
-- **Permanent exhaustion.** A supervisor runs one server per enabled account,
-  so every account would carry a standing +1 forever. Uniform penalties do not
-  change ordering, but `maxConcurrent` is not a ranking — an account with
-  `maxConcurrent: 1` would become permanently ineligible the moment its server
-  started.
-
-A resident lease still expires by wall clock if its owner dies, which is what
-makes the registry self-cleaning.
-
-### 39.4 The identity proxy
-
-`run` owns the public socket the caller named and proxies bytes to the
-wrapper's own socket in the private data root. It rewrites exactly three
-replies — `account/read`, `getAuthStatus`, `account/rateLimits/read` — from the
-account catalog and the usage store, and forwards everything else untouched.
-
-This is what makes §39.1's second defect a non-issue, and it does better than
-restoring parity: codex-swap knows which account is pinned and what its real
-headroom is, so an attached TUI shows the true email, plan, and quota rather
-than whatever its canonical home last cached for some other account. A
-programmatic client that never asks those three questions cannot tell the
-proxy is there.
-
-Two framing rules matter. Client frames are masked and server frames are not,
-so a rewritten reply is re-framed unmasked; and the upgrade request's
-`Sec-WebSocket-Extensions` header is stripped, because a negotiated
-permessage-deflate would leave payloads compressed and unreadable.
-
-### 39.5 Attachment from run and resume
-
-When the leased account has a live registration, `run` and `resume` compose
-`--remote <listen-url>` ahead of any forwarded subcommand; with none, the
-launch is byte-for-byte what it was. Billing is unchanged either way — the
-server is pinned to the same account the lease names — but the session lands
-inside the resident server, where an app-server client can see it.
-`settings.appServer.attachTui` disables it; an explicit `--remote` from the
-caller always wins.
-
-One earlier claim here proved wrong in the field: a remote-attached thread
-does **not** take the client's working directory. It records the *server's*
-unless the TUI passes an absolute `--cd` — `thread_cwd_from_config` in
-codex's `app_server_session.rs` sends only `remote_cwd_override` in Remote
-mode, and that override is the `-C/--cd` flag, absolute-only (agentsurface
-ADR 0023/0025; observed machine-wide as threads recording `/`, the
-launchd-started server's directory). Callers that care about the thread's
-recorded workspace must pass `--cd` themselves; a dedicated server (§39.7)
-additionally inherits the launch's own cwd, so its thread records the right
-directory even without one.
-
-### 39.6 Account enumeration for supervisors
-
-`snapshot --json` → `data.accounts[]` filtered to
-`enabled && present && auth.reloginRequired !== true`. The first two are
-necessary but not sufficient: an account with no credentials or an
-upstream-invalidated login is present and enabled, and a server for it would
-fail its preflight on every restart. All three fields are already in the
-snapshot, so this needed no schema change.
-
-### 39.7 Dedicated servers: one session, one socket
-
-`run`/`resume --server <unix-url|auto>` gives the launch its own app-server
-instead of attaching to the account's shared one: a child
-`app-server run --exclusive --parent-pid <ours>` pinned to the leased
-account, waited for until its public socket answers (the identity proxy
-binds only after the wrapped server does, so connect-success is readiness),
-then the TUI attached with `--remote` and the server SIGTERMed when the TUI
-exits. The session's socket is thereby its *identity*: the one thread that
-appears on it can only be the session this launch started, which is what
-lets a consumer (agentsurface's run records, agentbus's bridge) correlate a
-codex thread to its launch deterministically, before any turn — the thing no
-shared-server heuristic could do (cwd joins, creation-time ordering, and env
-stamps all failed; see agentsurface's build context).
-
-Lifecycle is the process tree, not a supervisor: the server dies with the
-launch on every clean and signalled path, `--parent-pid` reaps the SIGKILL
-orphan within seconds, and the registry row was already lease-expired for
-the crash case. `exclusive` marks the registration so `liveForAccount` —
-the only composition-side reader — never hands one session's server to an
-unrelated launch; `app-server list` still shows it, because discovery is the
-point. `app-server threads --listen <url>` is the matching read:
-`thread/loaded/list` plus `thread/read` over a real RFC 6455 upgrade, the
-only pre-turn view of a codex session that exists.
-
-An explicit `--server unix://…` is fail-hard — the caller records that
-socket as the session's identity, and silently attaching to a shared server
-would reintroduce the ambiguity this exists to end. `auto` and the
-`appServer.dedicated` setting degrade to a plain launch, saying so on
-stderr, only when the capability probe says no server can run at all.
-Billing is untouched in every case: the dedicated server is pinned to the
-same account the lease names, exactly as a shared one is (§39.3).
+The ndy fork wiring that existed only to support app-server helper fixes is
+therefore retired as well: `scripts/install.sh` sets `NDY_FORK_ACTIVE=0`, so
+the installed shim resolves the exact npm pin again unless an operator
+explicitly sets `CODEX_SWAP_NDY_PACKAGE_DIR` for testing.

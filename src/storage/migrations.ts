@@ -163,6 +163,21 @@ ALTER TABLE app_servers ADD COLUMN exclusive INTEGER NOT NULL DEFAULT 0
     CHECK (exclusive IN (0, 1));
 `,
   },
+  {
+    version: 4,
+    sql: `
+-- App-server sidecars were removed from codex-swap. Existing live resident
+-- leases must not continue to influence selection after upgrade, and the
+-- registry/capability tables are no longer part of the active schema.
+UPDATE invocation_leases
+   SET status = 'expired'
+ WHERE purpose = 'app-server'
+   AND status IN ('reserved', 'running');
+
+DROP TABLE IF EXISTS app_servers;
+DROP TABLE IF EXISTS ndy_capability;
+`,
+  },
 ];
 
 export function appliedSchemaVersion(db: DatabaseSync): number {

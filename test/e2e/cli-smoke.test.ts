@@ -45,6 +45,13 @@ test("unknown command exits 2 with guidance on stderr, nothing on stdout", async
   assert.match(result.stderr, /unknown command 'frobnicate'/);
 });
 
+test("retired app-server command is no longer registered", async () => {
+  const result = await runCli(["app-server", "check"]);
+  assert.equal(result.code, 2);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /unknown command 'app-server'/);
+});
+
 test("bare invocation prints help and exits 2", async () => {
   const result = await runCli([]);
   assert.equal(result.code, 2);

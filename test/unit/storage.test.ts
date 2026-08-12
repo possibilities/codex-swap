@@ -51,6 +51,9 @@ test("open applies migrations, WAL mode, and private permissions", () => {
   ]) {
     assert.ok(names.includes(expected), `missing table ${expected}`);
   }
+  for (const retired of ["app_servers", "ndy_capability"]) {
+    assert.ok(!names.includes(retired), `retired table ${retired} should not exist`);
+  }
 
   if (POSIX) {
     assert.equal(statSync(path.dirname(dbPath)).mode & 0o777, 0o700);

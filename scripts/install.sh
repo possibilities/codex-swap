@@ -1,16 +1,10 @@
 #!/usr/bin/env bash
-# codex-swap installer. Owns the `codex-swap` command and, while the switch
-# below is on, the managed codex-multi-auth fork that command binds to.
+# codex-swap installer. Owns the `codex-swap` command and, only while the
+# switch below is on, a managed codex-multi-auth fork that command binds to.
 #
-# The fork is on again for the runtime helper leak: stock 2.8.4 leaves app
-# helpers running past their idle timeout and stranded by the detach grace.
-# The fix is offered upstream as ndycode/codex-multi-auth#664; when a release
-# carries it, retire the fork by flipping NDY_FORK_ACTIVE to 0 and re-running
-# this script — the shim stops naming a package directory and the dependency
-# is the exact npm pin again. That switch is the whole retirement procedure,
-# and it is deliberately a line in this file rather than state on the machine:
-# a binding hand-written into the installed shim is unwired by the next
-# install without anyone noticing, which is how this one was lost once.
+# The app-server sidecar surface has been removed, so the previous runtime
+# helper patches are no longer needed here. Keep the fork switch at 0 unless a
+# future codex-swap feature again requires a narrow unreleased ndy primitive.
 #
 # Safe to re-run.
 set -uo pipefail
@@ -19,9 +13,9 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 BIN_DIR="${CODEX_SWAP_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 STATE_DIR="${CODEX_SWAP_INSTALL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/codex-swap}"
 RECEIPT="$STATE_DIR/install-receipt"
-# 1 while we carry a patch upstream has not released; 0 collapses back to the
-# npm pin. Nothing else in this file needs editing to switch between them.
-NDY_FORK_ACTIVE=1
+# 1 while we carry a patch upstream has not released; 0 uses the exact npm pin.
+# Nothing else in this file needs editing to switch between them.
+NDY_FORK_ACTIVE=0
 NDY_CHECKOUT="${CODEX_SWAP_NDY_CHECKOUT:-$HOME/src/codex-multi-auth}"
 NDY_FORK_URL="${CODEX_SWAP_NDY_FORK_URL:-https://github.com/possibilities/codex-multi-auth.git}"
 NDY_UPSTREAM_URL="https://github.com/ndycode/codex-multi-auth.git"
@@ -157,8 +151,7 @@ rebase_fork_onto_upstream() {
 
 # ── the managed codex-multi-auth fork ───────────────────────────────────────
 # Returns non-zero without installing anything if the checkout cannot be
-# converged: a stale or hand-edited dependency is worse than none, because
-# codex-swap would silently launch app-servers whose helpers outlive them.
+# converged: a stale or hand-edited dependency is worse than none.
 install_ndy_fork() {
     (( NDY_FORK_ACTIVE )) || { note "codex-multi-auth fork retired; using the npm pin"; return 0; }
 
@@ -314,9 +307,4 @@ chmod 700 "${STATE_DIR}"
 } >"${RECEIPT}"
 chmod 600 "${RECEIPT}"
 
-if [ "${status}" -eq 0 ]; then
-    note "verifying the app-server surface"
-    "${BIN_DIR}/codex-swap" app-server check >/dev/null 2>&1 ||
-        printf 'codex-swap install: `codex-swap app-server check` still refuses; see its output.\n' >&2
-fi
 exit "${status}"

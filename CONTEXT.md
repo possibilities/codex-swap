@@ -69,21 +69,3 @@ profile: pi's `/login` runs inside the profile, and the resulting token's
 one pool account (provider account ID as fallback) or nothing is stored.
 _Avoid_: matching identities by ndy `accountId` — workspace logins make it
 an org-style id while claims are account uuids.
-
-**Resident lease** — An invocation lease held by a long-lived, account-pinned
-server process rather than one interactive launch (`purpose: "app-server"`).
-Heartbeated for the process's lifetime; excluded from the concurrency penalty
-and `maxConcurrent`, because a standing server consumes nothing until a client
-uses it and that consumption is already observed as usage.
-_Avoid_: treating it as an ordinary invocation lease; it would double-count.
-
-**App-server registration** — The record binding one live `unix://` socket to
-the account its server is pinned to and to the resident lease that keeps it
-alive. Keyed by socket, so `run`/`resume` can find a leased account's server
-without hardcoding any consumer's socket directory.
-
-**Identity proxy** — The socket codex-swap owns in front of a pinned
-app-server, answering `account/read`, `getAuthStatus`, and
-`account/rateLimits/read` from the catalog and usage store while forwarding
-everything else. A server behind the rotation proxy has no ChatGPT identity of
-its own to report, which otherwise drops an attached TUI into sign-in.

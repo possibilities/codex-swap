@@ -42,12 +42,6 @@ codex-swap usage refresh            # operator-initiated broader refresh
 codex-swap run --strategy best -- exec "hello"
 codex-swap run --account you@example.com --
 
-# Resident app-servers: one per account, so a harness can address sessions
-# programmatically without a shared server billing everything to one account.
-codex-swap app-server check --json  # can this codex-multi-auth host one?
-codex-swap app-server run --account you@example.com --listen unix:///path/to.sock
-codex-swap app-server list          # run/resume attach to these automatically
-
 # Cross-account history: list every session, resume any UUID on any account.
 codex-swap history list
 codex-swap resume 5973b6c0-94b8-487b-a530-2aeb6098ae0e --account acc_other --
@@ -114,6 +108,9 @@ TUI repaints while a daemon owns fetching.
   display-grade and decision-grade data are separate in the schema.
 - **One canonical `CODEX_HOME`.** All sessions share one rollout store, so
   any session UUID resumes under any usable account.
+- **Standalone native launches.** `run` and `resume` invoke the native Codex
+  CLI through ndy's forced-account wrapper. codex-swap no longer starts,
+  registers, or attaches dedicated Codex app-server sidecars.
 - **Secret-free surfaces.** Raw tokens never enter the codex-swap database,
   JSON output, logs, or errors; logs additionally redact emails, JWTs, and
   callback URLs.

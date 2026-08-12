@@ -182,6 +182,33 @@ test("run pins by provider account id resolved from account key selector", async
   ]);
 });
 
+test("run no longer accepts codex-swap-owned server sidecar flags", async () => {
+  const world = makeWorld();
+  const result = await runCli(
+    ["run", "--account", "record:r1", "--server", "auto", "--"],
+    world.env,
+  );
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /Unknown option '--server'/);
+  assert.equal(invocations(world.recordDir).length, 0);
+});
+
+test("forwarded --remote remains a caller-owned Codex arg", async () => {
+  const world = makeWorld();
+  const result = await runCli(
+    ["run", "--account", "record:r1", "--", "--remote", "unix:///tmp/caller.sock"],
+    world.env,
+  );
+  assert.equal(result.code, 0, result.stderr);
+  const wrapperCalls = invocations(world.recordDir).filter((r) => r.bin === "codex");
+  assert.deepEqual(wrapperCalls[0]?.argv, [
+    "--account",
+    "acc_1",
+    "--remote",
+    "unix:///tmp/caller.sock",
+  ]);
+});
+
 test("run resolves unique email and propagates child exit code", async () => {
   const world = makeWorld();
   world.env["FAKE_NDY_CODEX_EXIT"] = "9";

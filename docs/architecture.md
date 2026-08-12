@@ -67,3 +67,12 @@ there is no silent fallback.
 **resume**: same as run, with `resume <session-id>` forwarded to the wrapper.
 Session IDs are account-independent because history lives in one canonical
 `CODEX_HOME`.
+
+## Retired sidecar surface
+
+codex-swap deliberately does not host Codex app-server sidecars. Ordinary
+`run` and `resume` are standalone native Codex launches through ndy's
+forced-account wrapper, under the same invocation lease choreography used by
+balancing harnesses. Older registry, capability, resident-lease, and
+identity-proxy support was removed because session placement now belongs
+outside this repository.

@@ -211,30 +211,12 @@ export const settingsSchema = z.looseObject({
     })
     .prefault({})
     .describe("Invocation lease lifetimes."),
-  appServer: z
-    .looseObject({
-      attachTui: z
-        .boolean()
-        .default(true)
-        .describe(
-          "Launch run/resume against the leased account's resident app-server with --remote when one is registered. The server is pinned to the same account, so billing is unchanged; attaching puts the session where app-server clients can see it. Disable to always launch a standalone Codex.",
-        ),
-      dedicated: z
-        .boolean()
-        .default(true)
-        .describe(
-          "Give every run/resume its own exclusive app-server — pinned to the leased account, torn down with the session — so a session's socket is its identity. On by default (ADR 0006); equivalent to passing --server auto on every launch, with --server/--no-server overriding per launch. Falls back to a plain launch, saying so on stderr, only when no dedicated server can run at all.",
-        ),
-    })
-    .prefault({})
-    .describe("Resident app-server behavior."),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
 export type UsageSettings = Settings["usage"];
 export type SelectionSettings = Settings["selection"];
 export type LeaseSettings = Settings["leases"];
-export type AppServerSettings = Settings["appServer"];
 
 export function defaultSettings(): Settings {
   return settingsSchema.parse({});
