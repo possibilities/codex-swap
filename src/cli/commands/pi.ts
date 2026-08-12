@@ -78,7 +78,7 @@ async function piCliAvailable(io: Io): Promise<number | null> {
       spawn.command,
       [...spawn.prefixArgs, "--version"],
       {
-        env: { ...process.env, AGENTSURFACE_LAUNCH: "1" },
+        env: { ...process.env, AGENTLAUNCH_LAUNCH: "1" },
         timeoutMs: 15_000,
       },
     );
@@ -200,7 +200,7 @@ async function linkCommand(args: string[]): Promise<number> {
         PI_CODING_AGENT_DIR: staging,
         // Already-routed sentinel: a shimmed `pi` must exec the real
         // binary here, or the link flow would recurse into balancing.
-        AGENTSURFACE_LAUNCH: "1",
+        AGENTLAUNCH_LAUNCH: "1",
       },
     });
 
@@ -408,7 +408,7 @@ async function statusCommand(args: string[]): Promise<number> {
         spawn.command,
         [...spawn.prefixArgs, "--version"],
         {
-          env: { ...process.env, AGENTSURFACE_LAUNCH: "1" },
+          env: { ...process.env, AGENTLAUNCH_LAUNCH: "1" },
           timeoutMs: 15_000,
         },
       );

@@ -98,6 +98,8 @@ test("containment env suppresses app-bind, launcher, statusline, and quota sweep
   assert.equal(env["CODEX_MULTI_AUTH_ENFORCE_CLI_FILE_AUTH_STORE"], "0");
   assert.equal(env["CODEX_MULTI_AUTH_STATUSLINE"], "0");
   assert.equal(env["CODEX_MULTI_AUTH_STATUS_QUOTA_REFRESH_INTERVAL_MS"], "0");
+  assert.equal(env["AGENTLAUNCH_LAUNCH"], "1");
+  assert.ok(!("AGENTSURFACE_LAUNCH" in env));
   assert.equal(env["PATH"], "/usr/bin");
 });
 

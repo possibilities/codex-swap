@@ -42,10 +42,10 @@ export const NDY_CONTAINMENT_ENV: Readonly<Record<string, string>> = {
   CODEX_AUTH_PREEMPTIVE_QUOTA_ENABLED: "0",
   CODEX_AUTH_PER_PROJECT_ACCOUNTS: "0",
   CODEX_SKIP_EMAIL_HYDRATE: "1",
-  // Already-routed sentinel (agentsurface ADR 0004): PATH shims that
+  // Already-routed sentinel (AgentLaunch ADR 0004): PATH shims that
   // balance bare harness calls exec the real binary when they see it, so a
   // wrapper-spawned `codex` is never re-balanced onto a different account.
-  AGENTSURFACE_LAUNCH: "1",
+  AGENTLAUNCH_LAUNCH: "1",
 };
 
 /**

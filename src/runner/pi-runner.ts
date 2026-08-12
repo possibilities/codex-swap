@@ -37,9 +37,9 @@ export async function runLeasedPi(options: {
         env: {
           ...baseEnv,
           PI_CODING_AGENT_DIR: options.profileDir,
-          // Already-routed sentinel (agentsurface ADR 0004): a shimmed
+          // Already-routed sentinel (AgentLaunch ADR 0004): a shimmed
           // `pi` on PATH must exec the real binary, not re-balance.
-          AGENTSURFACE_LAUNCH: "1",
+          AGENTLAUNCH_LAUNCH: "1",
         },
         ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
       }),
