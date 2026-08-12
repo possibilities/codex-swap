@@ -73,6 +73,11 @@ accounts with a linked, identity-verified profile (`pi_profile_missing`
 otherwise). Quota comes from the same store as Codex launches, because quota is
 per account, not per OAuth grant.
 
+If an account's key changes underneath a link — ndy supplying recordIds re-keys
+`account:<id>` to `record:<id>` — its profile is *adopted* onto the new key
+automatically, proven by the profile's own token claim rather than a fresh
+login. `pi status` and every launch path do it, and report the key it came from.
+
 ## Balancing harness integration
 
 Selection is explainable and claimable. A read-only `select` never mutates

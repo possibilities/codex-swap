@@ -2,6 +2,7 @@ import { parseArgs } from "node:util";
 import type { RedactedNdyAccount } from "../../accounts/redaction.ts";
 import { resolveExplicitSelector } from "../../accounts/selector.ts";
 import { NdyStoreReader } from "../../ndy/store-reader.ts";
+import { resolvePiProfiles, type PiAdoption } from "../../pi/adopt.ts";
 import { matchPiIdentity, profileIdentityConsistent } from "../../pi/identity.ts";
 import { runCapture, runInteractive } from "../../ndy/spawn.ts";
 import {
@@ -420,12 +421,11 @@ async function statusCommand(args: string[]): Promise<number> {
     const reader = new NdyStoreReader();
     const accounts = await reader.loadRedactedAccounts();
     const claims = await identityClaims(service, accounts);
-    const profiles = listProfiles();
-    const byKey = new Map(profiles.map((r) => [r.profile.accountKey, r]));
+    const resolution = resolvePiProfiles(accounts, claims);
+    const byKey = resolution.byKey;
 
     const rows = accounts.map((account) => {
       const record = byKey.get(account.accountKey);
-      byKey.delete(account.accountKey);
       if (record === undefined) {
         return {
           accountKey: account.accountKey,
@@ -452,7 +452,7 @@ async function statusCommand(args: string[]): Promise<number> {
         profileDir: record.dir,
       };
     });
-    const orphans = [...byKey.values()].map((r) => ({
+    const orphans = resolution.orphans.map((r) => ({
       accountKey: r.profile.accountKey,
       email: r.profile.email,
       profileDir: r.dir,
@@ -462,6 +462,7 @@ async function statusCommand(args: string[]): Promise<number> {
       pi: { binary: piBinary(), version: piVersion },
       canonicalAgentDir: canonicalPiAgentDir(),
       accounts: rows,
+      adoptedProfiles: resolution.adopted,
       orphanProfiles: orphans,
     });
     if (!io.json) {
@@ -477,6 +478,11 @@ async function statusCommand(args: string[]): Promise<number> {
               ? "linked, IDENTITY DRIFT — relink"
               : "linked";
         process.stdout.write(`  ${row.email ?? row.accountKey}  ${state}\n`);
+      }
+      for (const adoption of resolution.adopted) {
+        process.stdout.write(
+          `  ${adoption.email ?? adoption.accountKey}  adopted (re-keyed from ${adoption.previousAccountKey})\n`,
+        );
       }
       for (const orphan of orphans) {
         process.stdout.write(
@@ -560,19 +566,42 @@ async function executePiLaunch(mode: LaunchMode, piArgs: string[], io: Io): Prom
   }
 }
 
+/** One line per adoption, so a re-key never happens invisibly. */
+function reportAdoptions(adopted: readonly PiAdoption[]): void {
+  for (const adoption of adopted) {
+    process.stderr.write(
+      `codex-swap: adopted pi profile for ${adoption.email ?? adoption.accountKey} ` +
+        `(re-keyed from ${adoption.previousAccountKey})\n`,
+    );
+  }
+}
+
 /**
  * A launchable pi pin needs a linked profile with a credential whose
  * verified identity is not contradicted by the pool account's current
  * claim (fail-safe: an unreadable current claim keeps the link-time
  * verification). ndy credential state is deliberately not consulted
  * otherwise: pi launches ride the profile's own grant.
+ *
+ * A miss tries adoption before failing: an account whose key changed under
+ * it still has its own verified grant on disk, and re-keying it is cheaper
+ * and safer than sending the operator through another interactive login.
  */
 async function requireLaunchableProfile(
   service: SnapshotService,
+  accounts: readonly RedactedNdyAccount[],
   account: RedactedNdyAccount,
   io: Io,
 ): Promise<{ dir: string } | number> {
-  const record = profileFor(account.accountKey);
+  let record = profileFor(account.accountKey);
+  if (record === null) {
+    const resolution = resolvePiProfiles(
+      accounts,
+      await identityClaims(service, accounts),
+    );
+    reportAdoptions(resolution.adopted);
+    record = resolution.byKey.get(account.accountKey) ?? null;
+  }
   if (record === null) {
     return emitFailure(
       io,
@@ -649,7 +678,7 @@ async function piRunExplicit(
     );
   }
   const account = resolution.account;
-  const profile = await requireLaunchableProfile(service, account, io);
+  const profile = await requireLaunchableProfile(service, accounts, account, io);
   if (typeof profile === "number") return profile;
 
   await service.reconcile();
@@ -694,8 +723,10 @@ async function piRunWithStrategy(
   const accounts = await reader.loadRedactedAccounts();
   const byKey = new Map(accounts.map((a) => [a.accountKey, a]));
   const claims = await identityClaims(service, accounts);
+  const resolution = resolvePiProfiles(accounts, claims);
+  reportAdoptions(resolution.adopted);
   const linkedKeys = new Set(
-    listProfiles()
+    [...resolution.byKey.values()]
       .filter((record) => {
         const account = byKey.get(record.profile.accountKey);
         if (account === undefined) return false;
@@ -746,7 +777,7 @@ async function piRunWithStrategy(
 
   const account = byKey.get(result.accountKey);
   const profile =
-    account !== undefined ? await requireLaunchableProfile(service, account, io) : null;
+    account !== undefined ? await requireLaunchableProfile(service, accounts, account, io) : null;
   if (account === undefined || profile === null || typeof profile === "number") {
     service.leases.release(lease.leaseId, lease.ownerNonce, { status: "failed" });
     return typeof profile === "number"
@@ -807,7 +838,7 @@ async function piRunWithExistingLease(
       ExitCode.reloginRequired,
     );
   }
-  const profile = await requireLaunchableProfile(service, account, io);
+  const profile = await requireLaunchableProfile(service, accounts, account, io);
   if (typeof profile === "number") {
     service.leases.release(lease.leaseId, lease.ownerNonce, { status: "failed" });
     return profile;

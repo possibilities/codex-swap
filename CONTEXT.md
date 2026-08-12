@@ -69,3 +69,11 @@ profile: pi's `/login` runs inside the profile, and the resulting token's
 one pool account (provider account ID as fallback) or nothing is stored.
 _Avoid_: matching identities by ndy `accountId` — workspace logins make it
 an org-style id while claims are account uuids.
+
+**Adoption** — Re-keying an orphaned pi profile onto the pool account whose
+identity its own token proves, when a derived account key changed under it
+(`account:<providerAccountId>` → `record:<recordId>`). A directory rename
+plus rewritten `profile.json`; refused when ambiguous, uncredentialed, or
+contradicted.
+_Avoid_: calling it a re-link — adoption never touches credentials and
+never runs pi's `/login`.

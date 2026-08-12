@@ -28,7 +28,22 @@ broker (the only module that may see ndy tokens) derives each pool
 account's claim as a non-secret fact; the profile's claim must match
 exactly one of them (`providerAccountId` equality is accepted as a
 fallback when the id spaces align). Mismatched, ambiguous, or out-of-pool
-logins are discarded rather than stored. Pi
+logins are discarded rather than stored.
+
+Account keys are derived rather than stored, so a link can be stranded
+without anything being wrong with it: the day ndy starts supplying
+recordIds, every account re-keys from `account:<providerAccountId>` to
+`record:<recordId>`, the key-named profile directory stops matching, and a
+perfectly good grant reads as unlinked. Such a profile is **adopted** rather
+than re-linked — renamed onto the current key with its verification and link
+timestamp intact — when its own token's claim identifies exactly one pool
+account. The proof is the same claim comparison a link performs, so adoption
+widens no trust boundary; it only spares an interactive `/login` that would
+produce an equivalent grant. Ambiguity, a missing credential, a token that
+contradicts the recorded verification, and an occupied destination each
+decline the adoption and leave `pi link` as the answer.
+
+Pi
 runs take the same invocation leases as Codex runs (purpose `pi-session`),
 and strategy selection excludes accounts without a verified profile
 (`pi_profile_missing`) — quota alone cannot make an account launchable by a
