@@ -77,3 +77,14 @@ plus rewritten `profile.json`; refused when ambiguous, uncredentialed, or
 contradicted.
 _Avoid_: calling it a re-link — adoption never touches credentials and
 never runs pi's `/login`.
+
+**Advisory pin** — A `--claim` lease on a pi launch: chosen by a balancer
+that selects on quota alone and cannot see pi linkage, so an account it
+picks that pi cannot use is replaced by one that can. A `--account` pin is
+binding and fails instead.
+_Avoid_: treating the two pins alike; who chose decides whether a
+substitution is help or concealment.
+
+**Prune** — Deleting pi profiles no pool account claims, after adoption has
+run. Irreversible: only a new [[Link]] restores a pruned grant, which is why
+it confirms per profile and refuses non-interactively without `--yes`.

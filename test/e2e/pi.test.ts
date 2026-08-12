@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawn } from "node:child_process";
 import http from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -282,6 +289,134 @@ test("strategy selection only considers linked accounts", async () => {
     const none = await runCli(["pi", "run", "--strategy", "best", "--"], bare.env);
     assert.equal(none.code, 3);
     assert.match(none.stderr, /no account has a linked pi profile/);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a balancer claim on an unlinked account is demoted, an --account pin is not", async () => {
+  const server = await startServer();
+  try {
+    const world = makeWorld(server.url);
+
+    // Only account 2 is linked; account 1 has the better headroom, so the
+    // unrestricted codex balancer — which cannot see pi linkage — claims it.
+    const link = await runCli(["pi", "link"], {
+      ...world.env,
+      FAKE_PI_LOGIN_AS: "uuid-2",
+      FAKE_PI_LOGIN_EMAIL: "user2@x.com",
+    });
+    assert.equal(link.code, 0, link.stderr);
+    await runCli(["usage", "refresh", "--json"], world.env);
+
+    const claim = await runCli(["select", "--claim", "--json"], world.env);
+    assert.equal(claim.code, 0, claim.stderr);
+    const claimEnvelope = JSON.parse(claim.stdout) as {
+      data: { lease: { leaseId: string; accountKey: string } };
+    };
+    assert.equal(
+      claimEnvelope.data.lease.accountKey,
+      "record:r1",
+      "quota alone picks the unlinked one",
+    );
+
+    // The pin is advisory: the launch lands on the account pi can use.
+    const run = await runCli(
+      ["pi", "run", "--claim", claimEnvelope.data.lease.leaseId, "--"],
+      { ...world.env, FAKE_PI_RECORD: world.recordPath },
+    );
+    assert.equal(run.code, 0, run.stderr);
+    assert.match(run.stderr, /no linked pi profile/, "says why the pin was dropped");
+    assert.match(run.stderr, /using record:r2 instead/);
+    const invocations = piInvocations(world.recordPath);
+    assert.equal(invocations.length, 1);
+    assert.match(invocations[0]!.agentDir ?? "", /record-r2/);
+
+    // The demoted lease is released, not failed — nothing was wrong with
+    // the account itself — and the replacement carried the run.
+    const leases = await runCli(["leases", "--all", "--json"], world.env);
+    const leasesEnvelope = JSON.parse(leases.stdout) as {
+      data: { leases: Array<{ leaseId: string; accountKey: string; status: string }> };
+    };
+    const demoted = leasesEnvelope.data.leases.find(
+      (l) => l.leaseId === claimEnvelope.data.lease.leaseId,
+    );
+    assert.equal(demoted?.status, "released");
+    const replacement = leasesEnvelope.data.leases.find(
+      (l) => l.accountKey === "record:r2" && l.leaseId !== claimEnvelope.data.lease.leaseId,
+    );
+    assert.equal(replacement?.status, "released");
+
+    // The same account named explicitly by a human still fails hard.
+    const pinned = await runCli(["pi", "run", "--account", "user1@x.com", "--"], world.env);
+    assert.equal(pinned.code, 4);
+    assert.match(pinned.stderr, /no linked pi profile/);
+  } finally {
+    await server.close();
+  }
+});
+
+test("prune adopts before it deletes, and never deletes unasked", async () => {
+  const server = await startServer();
+  try {
+    const world = makeWorld(server.url);
+    const accountsPath = path.join(
+      world.env["CODEX_MULTI_AUTH_DIR"]!,
+      "openai-codex-accounts.json",
+    );
+    const store = JSON.parse(readFileSync(accountsPath, "utf8")) as {
+      version: number;
+      accounts: Array<{ recordId: string }>;
+      activeIndex: number;
+    };
+
+    const link = await runCli(["pi", "link"], {
+      ...world.env,
+      FAKE_PI_LOGIN_AS: "uuid-1",
+      FAKE_PI_LOGIN_EMAIL: "user1@x.com",
+    });
+    assert.equal(link.code, 0, link.stderr);
+
+    // Account 1 re-keys underneath its link, exactly as ndy gaining a new
+    // recordId does. The profile is stranded, not stale.
+    store.accounts[0]!.recordId = "r1-rekeyed";
+    writeFileSync(accountsPath, JSON.stringify(store));
+
+    const prune = await runCli(["pi", "prune", "--json"], world.env);
+    assert.equal(prune.code, 0, prune.stderr);
+    const pruneEnvelope = JSON.parse(prune.stdout) as {
+      data: { adopted: Array<{ accountKey: string }>; removed: unknown[]; kept: unknown[] };
+    };
+    assert.equal(pruneEnvelope.data.adopted.length, 1, "adopted rather than offered for deletion");
+    assert.equal(pruneEnvelope.data.adopted[0]?.accountKey, "record:r1-rekeyed");
+    assert.deepEqual(pruneEnvelope.data.removed, []);
+
+    // Now account 1 leaves the pool outright: its profile is a true orphan.
+    store.accounts.splice(0, 1);
+    store.activeIndex = 0;
+    writeFileSync(accountsPath, JSON.stringify(store));
+
+    const refuses = await runCli(["pi", "prune", "--json"], world.env);
+    assert.equal(refuses.code, 2, "non-interactive prune refuses without --yes");
+    assert.match(refuses.stdout, /CONFIRMATION_REQUIRED/);
+
+    const status = await runCli(["pi", "status", "--json"], world.env);
+    const statusEnvelope = JSON.parse(status.stdout) as {
+      data: { orphanProfiles: unknown[] };
+    };
+    assert.equal(statusEnvelope.data.orphanProfiles.length, 1, "the refusal deleted nothing");
+
+    const pruned = await runCli(["pi", "prune", "--yes", "--json"], world.env);
+    assert.equal(pruned.code, 0, pruned.stderr);
+    const prunedEnvelope = JSON.parse(pruned.stdout) as {
+      data: { removed: Array<{ accountKey: string; profileDir: string }> };
+    };
+    assert.equal(prunedEnvelope.data.removed.length, 1);
+    assert.equal(existsSync(prunedEnvelope.data.removed[0]!.profileDir), false);
+
+    const after = await runCli(["pi", "status", "--json"], world.env);
+    const afterEnvelope = JSON.parse(after.stdout) as { data: { orphanProfiles: unknown[] } };
+    assert.deepEqual(afterEnvelope.data.orphanProfiles, []);
   } finally {
     await server.close();
   }

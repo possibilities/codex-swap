@@ -48,3 +48,16 @@ runs take the same invocation leases as Codex runs (purpose `pi-session`),
 and strategy selection excludes accounts without a verified profile
 (`pi_profile_missing`) — quota alone cannot make an account launchable by a
 harness it was never linked to.
+
+That exclusion cannot bind a lease claimed elsewhere: a balancing harness
+selects on quota through `select --claim`, knowing nothing about pi
+linkage, and then hands the lease to `pi run --claim`. Rather than teach
+every balancer about profiles — the same rule in two repositories, drifting
+— such a pin is treated as **advisory**: an account pi has no usable grant
+for releases its lease and the request re-selects among linked accounts,
+restricted by the same set the strategy path uses. A `--account` pin stays
+binding, because a human naming an account has said something a balancer
+did not. `IDENTITY_CONFLICT` stops either way: a profile contradicted by
+the pool is a fact about that account, and launching someone else would
+bury it. The demoted lease is released as `released`, not `failed` —
+nothing is wrong with the account, and only live leases affect scoring.

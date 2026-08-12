@@ -61,6 +61,7 @@ verifies the resulting identity against the pool before storing anything.
 ```sh
 codex-swap pi link                  # interactive; repeat per account
 codex-swap pi status
+codex-swap pi prune                 # drop profiles no account claims
 codex-swap pi run --strategy best -- -p "hello"
 codex-swap pi run --account you@example.com -- --model gpt-5.2-codex
 codex-swap pi run --claim "$lease" -- …
@@ -77,6 +78,14 @@ If an account's key changes underneath a link — ndy supplying recordIds re-key
 `account:<id>` to `record:<id>` — its profile is *adopted* onto the new key
 automatically, proven by the profile's own token claim rather than a fresh
 login. `pi status` and every launch path do it, and report the key it came from.
+
+A `--claim` lease is *advisory*: it comes from a balancer that selects on quota
+and cannot see pi linkage, so a claim on an account pi has no grant for is
+released and the run re-selects among linked accounts. A `--account` pin is
+binding and fails instead — a human naming an account said something the
+balancer did not. `pi prune` removes profiles no account claims, adopting first
+so nothing recoverable is deleted; it confirms one by one and refuses
+non-interactively without `--yes`, because only a fresh `pi link` can undo it.
 
 `~/.pi/agent/auth.json` is **expected to be empty**: `auth.json` is the one
 per-profile real file, so each account's grant lives in its own profile and the
