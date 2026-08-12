@@ -78,6 +78,19 @@ If an account's key changes underneath a link — ndy supplying recordIds re-key
 automatically, proven by the profile's own token claim rather than a fresh
 login. `pi status` and every launch path do it, and report the key it came from.
 
+`~/.pi/agent/auth.json` is **expected to be empty**: `auth.json` is the one
+per-profile real file, so each account's grant lives in its own profile and the
+canonical one is never written. A bare `pi` reporting no authenticated provider
+is therefore normal and says nothing about the pool — it means the launch
+skipped the wrapper, most often because `AGENTLAUNCH_LAUNCH=1` was already set
+in that shell (agentlaunch's recursion sentinel makes the shim exec the real
+binary). Check a profile instead of the canonical dir:
+
+```sh
+codex-swap pi status
+PI_CODING_AGENT_DIR="$profile" pi auth check --provider openai-codex --json
+```
+
 ## Balancing harness integration
 
 Selection is explainable and claimable. A read-only `select` never mutates
