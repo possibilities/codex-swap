@@ -2396,8 +2396,11 @@ Two defects surfaced, neither in codex-swap:
    helper, with `detachOnExit: false` because a resident server owns its proxy
    for its whole lifetime, and `proxyAppServerAccountRead` set so the move does
    not silently drop the rewriting stdio clients rely on. codex-swap ran on a
-   patch fork between 2026-08-10 and the 2.8.4 release; that fork is retired
-   and the dependency is the exact npm pin again.
+   patch fork between 2026-08-10 and the 2.8.4 release; that wiring retired
+   with the release. The fork checkout is bound again as of 2026-08-11, for an
+   unrelated patch — the runtime helper leak, offered upstream as #664 — at
+   `~/src/codex-multi-auth@integration`, declared by `NDY_FORK_ACTIVE` in
+   `scripts/install.sh`. Nothing about the app-server routing depends on it.
 
    `app-server check` still reports whether the resolved ndy carries the fix,
    and still earns its keep: it matches the routing structurally rather than by
