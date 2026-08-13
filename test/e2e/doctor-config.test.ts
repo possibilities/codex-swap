@@ -93,7 +93,7 @@ test("doctor --json reports healthy checks without secrets", async () => {
   }
   const ndy = envelope.data.checks.find((c) => c.name === "codex-multi-auth");
   assert.equal(ndy?.status, "ok");
-  assert.match(ndy?.detail ?? "", /2\.8\.4/);
+  assert.match(ndy?.detail ?? "", /2\.8\.5/);
   assert.ok(!result.stdout.includes("refresh-token-secret"), "no secrets in doctor output");
 });
 
