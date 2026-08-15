@@ -16,6 +16,9 @@ trusted for this) and excludes accounts whose record covers that family
 (`family_rate_limited`). Reading `rateLimitResetTimes` from the store stays
 inside the existing store-reader boundary, beside `coolingDownUntil`.
 
+The wiki's `codex-family-rate-limit-routing` page records the cross-repo
+ownership split and the incident behind this.
+
 The record is **advisory, never verdict**: ndy writes it from one moment's
 response headers or a preemptive quota mark, and nothing guarantees the
 provider still enforces it. When records are the sole obstacle to a launch
