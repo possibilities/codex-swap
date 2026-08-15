@@ -51,6 +51,19 @@ export const settingsSchema = z.looseObject({
         .describe(
           "Fallback cap on simultaneous invocation leases per account, applied only to accounts with no maxConcurrent policy of their own. null means no cap.",
         ),
+      familyFilter: z
+        .boolean()
+        .default(true)
+        .describe(
+          "Exclude accounts whose ndy per-family rate-limit record covers the launch's model family, so a pinned session is never wedged behind the runtime proxy's local 503s. Records are advisory: launch paths live-verify before refusing outright.",
+        ),
+      familyVerifyMinIntervalMs: z
+        .int()
+        .min(0)
+        .default(300_000)
+        .describe(
+          "Minimum interval between live verifications of family rate-limit records. Verification runs only when the records are the sole obstacle to a launch, and clears the ones the live probe disproves.",
+        ),
     })
     .prefault({})
     .describe("How an account is chosen when none is forced."),

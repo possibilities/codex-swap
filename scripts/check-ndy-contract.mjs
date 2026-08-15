@@ -79,6 +79,31 @@ check(
   authDts.includes("refreshAccessToken") || authAuthDts.includes("refreshAccessToken"),
 );
 
+// Family-aware selection (docs/adr/0006) consumes three more CLI surfaces
+// and one more storage field; a pin bump must re-verify each.
+const accountsDts = readFileSync(path.join(root, "dist/lib/accounts.d.ts"), "utf8");
+check(
+  "storage records carry rateLimitResetTimes",
+  accountsDts.includes("rateLimitResetTimes"),
+);
+const modelMapSource = readFileSync(
+  path.join(root, "dist/lib/request/helpers/model-map.js"),
+  "utf8",
+);
+check("models matrix carries promptFamily", modelMapSource.includes("promptFamily"));
+const forecastSource = readFileSync(path.join(root, "dist/lib/forecast.js"), "utf8");
+for (const field of ["availability", "liveQuota", "waitMs"]) {
+  check(`forecast emits ${field}`, forecastSource.includes(field));
+}
+const rotationSource = readFileSync(
+  path.join(root, "dist/lib/codex-manager/commands/rotation.js"),
+  "utf8",
+);
+check(
+  "rotation reset-rate-limits reports clearedRateLimitKeys",
+  rotationSource.includes("clearedRateLimitKeys"),
+);
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} contract check(s) failed — follow docs/handoff.md §34 before upgrading.`);
   process.exit(1);

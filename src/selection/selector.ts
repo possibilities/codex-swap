@@ -13,6 +13,17 @@ import type {
  */
 export type SelectionStrategy = "best" | "next-available";
 
+/**
+ * An active per-family rate-limit record for one account, resolved against
+ * the launch's model family. Advisory by construction: ndy writes these from
+ * provider responses and preemptive quota marks, and a record can outlive
+ * the real limit — launch paths live-verify before refusing outright.
+ */
+export interface FamilyBlock {
+  family: string;
+  untilMs: number;
+}
+
 export interface SelectionReason {
   strategy: SelectionStrategy;
   summary: string;
@@ -43,6 +54,7 @@ export type SelectionResult =
       kind: "none";
       reason:
         | "all_exhausted"
+        | "all_family_blocked"
         | "all_unknown"
         | "all_disabled"
         | "all_quarantined"
@@ -59,6 +71,8 @@ export interface SelectionInput {
   allowUnknown: boolean;
   lastSelectedAccountKey: string | null;
   sequence: number;
+  /** Active family rate-limit records keyed by accountKey; null disables. */
+  familyBlocks?: ReadonlyMap<string, FamilyBlock> | null;
 }
 
 interface ScoredCandidate {
@@ -72,6 +86,7 @@ function effectiveExclusions(
   view: SnapshotAccountView,
   settings: SelectionSettings,
   allowUnknown: boolean,
+  familyBlocks: ReadonlyMap<string, FamilyBlock> | null,
 ): AccountExclusionReason[] {
   let exclusions = [...view.selection.exclusions];
   if (allowUnknown) {
@@ -85,6 +100,9 @@ function effectiveExclusions(
     !exclusions.includes("max_concurrent_reached")
   ) {
     exclusions.push("max_concurrent_reached");
+  }
+  if (familyBlocks?.has(view.accountKey) === true) {
+    exclusions.push("family_rate_limited");
   }
   return exclusions;
 }
@@ -104,10 +122,11 @@ function scoreCandidate(
 }
 
 export function selectAccount(input: SelectionInput): SelectionResult {
+  const familyBlocks = input.familyBlocks ?? null;
   const scored = input.accounts.map((view) =>
     scoreCandidate(
       view,
-      effectiveExclusions(view, input.settings, input.allowUnknown),
+      effectiveExclusions(view, input.settings, input.allowUnknown, familyBlocks),
       input.settings,
     ),
   );
@@ -123,7 +142,7 @@ export function selectAccount(input: SelectionInput): SelectionResult {
     return {
       kind: "none",
       reason: noneReason(scored),
-      nextReadyAt: earliestRecovery(scored),
+      nextReadyAt: earliestRecovery(scored, familyBlocks),
       exclusions: exclusionReport,
     };
   }
@@ -229,6 +248,7 @@ function noneReason(
     );
   };
   if (every("quota_exhausted")) return "all_exhausted";
+  if (every("family_rate_limited")) return "all_family_blocked";
   if (every(["manually_disabled", "ndy_disabled", "absent"])) {
     return "all_disabled";
   }
@@ -236,10 +256,20 @@ function noneReason(
   return "all_unknown";
 }
 
-/** Earliest credible recovery among exhausted accounts' binding windows. */
-function earliestRecovery(scored: ScoredCandidate[]): string | null {
+/**
+ * Earliest credible recovery among exhausted accounts' binding windows and
+ * family-blocked accounts' recorded reset times.
+ */
+function earliestRecovery(
+  scored: ScoredCandidate[],
+  familyBlocks: ReadonlyMap<string, FamilyBlock> | null,
+): string | null {
   const resets: number[] = [];
   for (const candidate of scored) {
+    if (candidate.effectiveExclusions.includes("family_rate_limited")) {
+      const block = familyBlocks?.get(candidate.view.accountKey);
+      if (block !== undefined) resets.push(block.untilMs);
+    }
     if (!candidate.effectiveExclusions.includes("quota_exhausted")) continue;
     const measurement =
       candidate.view.usage.measurement ??

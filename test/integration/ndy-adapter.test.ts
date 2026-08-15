@@ -158,3 +158,52 @@ test("shell metacharacters in args are data, not shell", async () => {
   const [record] = readInvocations(recordDir);
   assert.deepEqual(record?.argv.slice(2), hostile);
 });
+
+test("promptFamilyForModel resolves through the models matrix", async () => {
+  const { adapter, recordDir } = makeAdapter();
+  const family = await adapter.promptFamilyForModel("gpt-5.6-sol");
+  assert.equal(family, "gpt-5.2");
+  const [invocation] = readInvocations(recordDir);
+  assert.deepEqual(invocation?.argv, ["models", "--json", "--model", "gpt-5.6-sol"]);
+
+  const { adapter: familyless } = makeAdapter({
+    FAKE_NDY_MODELS_JSON: JSON.stringify({ matrix: { entries: [{ model: "mystery" }] } }),
+  });
+  assert.equal(await familyless.promptFamilyForModel("mystery"), null);
+
+  await assert.rejects(
+    adapter.promptFamilyForModel("--flag"),
+    NdyContractError,
+  );
+});
+
+test("forecast passes the model and live flag and validates the envelope", async () => {
+  const { adapter, recordDir } = makeAdapter();
+  const cached = await adapter.forecast("gpt-5.6-sol");
+  assert.equal(cached.liveProbe, false);
+  const live = await adapter.forecast("gpt-5.6-sol", { live: true });
+  assert.equal(live.liveProbe, true);
+  const argvs = readInvocations(recordDir).map((entry) => entry.argv);
+  assert.deepEqual(argvs, [
+    ["forecast", "--json", "--model", "gpt-5.6-sol"],
+    ["forecast", "--json", "--model", "gpt-5.6-sol", "--live"],
+  ]);
+
+  const { adapter: malformed } = makeAdapter({ FAKE_NDY_MALFORMED: "1" });
+  await assert.rejects(malformed.forecast(null), NdyContractError);
+});
+
+test("resetRateLimits converts the 0-based index to the CLI's display index", async () => {
+  const { adapter, recordDir } = makeAdapter();
+  const result = await adapter.resetRateLimits(0);
+  assert.equal(result.ok, true);
+  const [invocation] = readInvocations(recordDir);
+  assert.deepEqual(invocation?.argv, [
+    "rotation",
+    "reset-rate-limits",
+    "--account",
+    "1",
+    "--json",
+  ]);
+  await assert.rejects(adapter.resetRateLimits(-1), NdyContractError);
+});

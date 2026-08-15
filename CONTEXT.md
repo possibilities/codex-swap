@@ -57,6 +57,14 @@ Codex homes.
 **Forced account** — An ephemeral account pin applied to one wrapper
 invocation. Never changes ndy's persisted active or pinned account.
 
+**Family block** — An active per-family rate-limit record in ndy's store
+(`rateLimitResetTimes`), resolved against the launch's model family and
+excluding that account from selection (`family_rate_limited`). Advisory:
+when it is the sole obstacle to a launch, a live probe gets the final word
+and a disproved record is cleared through ndy's own reset command.
+_Avoid_: treating it as quota exhaustion — the codex-lane windows can be
+nearly empty while a family is fully blocked, and vice versa.
+
 **Pi profile** — A per-account `PI_CODING_AGENT_DIR` under the codex-swap
 data root holding that account's own pi OAuth grant, with shared pi
 configuration symlinked from the canonical agent dir. The unit `pi run`

@@ -54,6 +54,18 @@
               "type": "null"
             }
           ]
+        },
+        "familyFilter": {
+          "default": true,
+          "description": "Exclude accounts whose ndy per-family rate-limit record covers the launch's model family, so a pinned session is never wedged behind the runtime proxy's local 503s. Records are advisory: launch paths live-verify before refusing outright.",
+          "type": "boolean"
+        },
+        "familyVerifyMinIntervalMs": {
+          "default": 300000,
+          "description": "Minimum interval between live verifications of family rate-limit records. Verification runs only when the records are the sole obstacle to a launch, and clears the ones the live probe disproves.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": {}

@@ -17,6 +17,7 @@ export type AccountExclusionReason =
   | "cooldown_active"
   | "usage_unknown"
   | "quota_exhausted"
+  | "family_rate_limited"
   | "max_concurrent_reached"
   | "pi_profile_missing";
 

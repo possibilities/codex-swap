@@ -22,6 +22,7 @@ import { dataRoot, databasePath } from "../storage/paths.ts";
 import { InvocationLeaseStore, type InvocationLease } from "../selection/leases.ts";
 import {
   selectAccount,
+  type FamilyBlock,
   type SelectionResult,
   type SelectionStrategy,
 } from "../selection/selector.ts";
@@ -350,6 +351,12 @@ export class SnapshotService {
      * account launchable by a harness it was never linked to).
      */
     restrict?: { keys: ReadonlySet<string>; reason: AccountExclusionReason };
+    /**
+     * Active family rate-limit records for the launch's model family,
+     * excluding their accounts with `family_rate_limited`. Never applied to
+     * a forced account — explicit targeting is gated by its own caller.
+     */
+    familyBlocks?: ReadonlyMap<string, FamilyBlock> | null;
   }): { result: SelectionResult; lease: InvocationLease | null } {
     return this.db.immediate(() => {
       this.leases.expireStaleLocked();
@@ -411,6 +418,7 @@ export class SnapshotService {
           allowUnknown: options.allowUnknown,
           lastSelectedAccountKey: this.activeAccountKey(),
           sequence: this.selectionSequenceLocked(),
+          familyBlocks: options.familyBlocks ?? null,
         });
       }
 
@@ -441,6 +449,7 @@ export class SnapshotService {
   selectReadOnly(options: {
     strategy: SelectionStrategy;
     allowUnknown: boolean;
+    familyBlocks?: ReadonlyMap<string, FamilyBlock> | null;
   }): SelectionResult {
     return this.db.immediate(() => {
       this.leases.expireStaleLocked();
@@ -452,6 +461,7 @@ export class SnapshotService {
         allowUnknown: options.allowUnknown,
         lastSelectedAccountKey: this.activeAccountKey(),
         sequence: this.selectionSequenceLocked(),
+        familyBlocks: options.familyBlocks ?? null,
       });
     });
   }

@@ -292,3 +292,78 @@ test("disabled and quarantined pools report their dominant blocking reason", () 
   assert.equal(quarantined.kind, "none");
   if (quarantined.kind === "none") assert.equal(quarantined.reason, "all_quarantined");
 });
+
+test("a family block excludes its account and the rest of the pool competes", () => {
+  const result = selectAccount(
+    input(
+      [
+        view({ accountKey: "record:a", headroom: 99 }),
+        view({ accountKey: "record:b", headroom: 60 }),
+      ],
+      {
+        familyBlocks: new Map([
+          ["record:a", { family: "gpt-5.2", untilMs: Date.parse("2026-08-17T13:44:41Z") }],
+        ]),
+      },
+    ),
+  );
+  assert.equal(result.kind, "selected");
+  if (result.kind === "selected") {
+    assert.equal(result.accountKey, "record:b");
+    assert.deepEqual(result.exclusions, [
+      { accountKey: "record:a", exclusions: ["family_rate_limited"] },
+    ]);
+  }
+});
+
+test("a fully family-blocked pool refuses with the recorded reset as recovery", () => {
+  const untilMs = Date.parse("2026-08-17T13:44:41Z");
+  const result = selectAccount(
+    input(
+      [
+        view({ accountKey: "record:a", headroom: 99 }),
+        view({ accountKey: "record:b", headroom: 60 }),
+      ],
+      {
+        familyBlocks: new Map([
+          ["record:a", { family: "gpt-5.2", untilMs }],
+          ["record:b", { family: "gpt-5.2", untilMs: untilMs + 60_000 }],
+        ]),
+      },
+    ),
+  );
+  assert.equal(result.kind, "none");
+  if (result.kind === "none") {
+    assert.equal(result.reason, "all_family_blocked");
+    assert.equal(result.nextReadyAt, new Date(untilMs).toISOString());
+  }
+});
+
+test("family blocks stack with other exclusions without masking exhaustion", () => {
+  const result = selectAccount(
+    input(
+      [
+        view({
+          accountKey: "record:a",
+          headroom: 0,
+          exclusions: ["quota_exhausted"],
+          resetsAt: "2026-08-16T06:00:00.000Z",
+        }),
+      ],
+      {
+        familyBlocks: new Map([
+          ["record:a", { family: "gpt-5.2", untilMs: Date.parse("2026-08-17T13:44:41Z") }],
+        ]),
+      },
+    ),
+  );
+  assert.equal(result.kind, "none");
+  if (result.kind === "none") {
+    assert.equal(result.reason, "all_exhausted");
+    assert.deepEqual(result.exclusions, [
+      { accountKey: "record:a", exclusions: ["quota_exhausted", "family_rate_limited"] },
+    ]);
+    // The earlier quota reset wins as the credible recovery time.
+    assert.equal(result.nextReadyAt, "2026-08-16T06:00:00.000Z");
+  }
+});

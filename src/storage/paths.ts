@@ -47,6 +47,11 @@ export function logsDir(root: string): string {
   return path.join(root, "logs");
 }
 
+/** Rate-limit gate for live verification of family rate-limit records. */
+export function familyVerifyStampPath(root: string): string {
+  return path.join(root, "family-verify-stamp.json");
+}
+
 export function logFilePath(root: string): string {
   return path.join(logsDir(root), "codex-swap.jsonl");
 }

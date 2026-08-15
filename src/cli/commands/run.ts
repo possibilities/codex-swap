@@ -6,12 +6,20 @@ import {
 import { createNdyAdapter, type NdyAdapter } from "../../ndy/adapter.ts";
 import { NdyStoreReader } from "../../ndy/store-reader.ts";
 import { runLeasedCodex } from "../../runner/codex-runner.ts";
+import {
+  healableBlockedKeys,
+  loadFamilyBlockContext,
+  verifyAndHealFamilyBlocks,
+  type FamilyBlockContext,
+} from "../../selection/family-blocks.ts";
 import type { InvocationLease } from "../../selection/leases.ts";
-import type { SelectionStrategy } from "../../selection/selector.ts";
+import type { FamilyBlock, SelectionStrategy } from "../../selection/selector.ts";
 import { SnapshotService } from "../../snapshot/service.ts";
+import { dataRoot, familyVerifyStampPath } from "../../storage/paths.ts";
 import { commandIo, emitFailure, splitForwardedArgs } from "../command-io.ts";
 import { mapCommandError } from "../errors.ts";
 import { ExitCode } from "../exit-codes.ts";
+import { toIsoUtc } from "../../util/clock.ts";
 
 const USAGE = `Usage: codex-swap run --account <selector> -- [codex args...]
        codex-swap run --strategy [best|next-available] [--allow-unknown] -- [codex args...]
@@ -152,6 +160,54 @@ export async function runRunCommand(args: string[]): Promise<number> {
 
 type Io = ReturnType<typeof commandIo>;
 
+const warnToStderr = (message: string): void => {
+  process.stderr.write(`codex-swap: ${message}\n`);
+};
+
+/** Family-block context for one launch, degrading to null on any failure. */
+async function familyContextFor(
+  service: SnapshotService,
+  adapter: NdyAdapter,
+  codexArgs: string[],
+): Promise<FamilyBlockContext | null> {
+  return loadFamilyBlockContext({
+    adapter,
+    reader: new NdyStoreReader(),
+    forwardedArgs: codexArgs,
+    enabled: service.settings.selection.familyFilter,
+    warn: warnToStderr,
+  });
+}
+
+/**
+ * Live-verifies records that are the sole obstacle and returns the block
+ * set to retry selection with, or null when nothing was cleared (the
+ * refusal stands). See family-blocks.ts for the advisory-record contract.
+ */
+async function healBlocksOrNull(
+  service: SnapshotService,
+  adapter: NdyAdapter,
+  context: FamilyBlockContext,
+  healableKeys: readonly string[],
+): Promise<ReadonlyMap<string, FamilyBlock> | null> {
+  const outcome = await verifyAndHealFamilyBlocks({
+    adapter,
+    reader: new NdyStoreReader(),
+    context,
+    healableKeys,
+    stampPath: familyVerifyStampPath(dataRoot()),
+    minIntervalMs: service.settings.selection.familyVerifyMinIntervalMs,
+    warn: warnToStderr,
+  });
+  if (outcome.kind !== "healed" || outcome.clearedAccountKeys.length === 0) {
+    return null;
+  }
+  warnToStderr(
+    `cleared stale ${context.family} rate-limit record on ${outcome.clearedAccountKeys.join(", ")} after live verification`,
+  );
+  return outcome.blocks;
+}
+
 async function launchSession(
   service: SnapshotService,
   adapter: NdyAdapter,
@@ -245,6 +301,34 @@ async function runExplicit(
     );
   }
 
+  // A family rate-limit record on an explicitly targeted account would wedge
+  // the pinned session behind the runtime proxy's local 503s. The record is
+  // advisory, so give a live probe the final word before refusing.
+  const familyContext = await familyContextFor(service, adapter, codexArgs);
+  if (familyContext !== null && familyContext.blocks.has(account.accountKey)) {
+    const healed = await healBlocksOrNull(service, adapter, familyContext, [
+      account.accountKey,
+    ]);
+    const stillBlocked = healed === null || healed.has(account.accountKey);
+    if (stillBlocked) {
+      const block = familyContext.blocks.get(account.accountKey)!;
+      return emitFailure(
+        io,
+        {
+          code: "FAMILY_RATE_LIMITED",
+          message: `${account.accountKey} is rate-limited for model family '${block.family}' until ${toIsoUtc(block.untilMs)}; the pinned session would only receive 503s. Pick another account or model family, or retry after the reset.`,
+          retryable: true,
+          details: {
+            family: block.family,
+            until: toIsoUtc(block.untilMs),
+            model: familyContext.model,
+          },
+        },
+        ExitCode.noEligibleAccount,
+      );
+    }
+  }
+
   await service.reconcile();
   const { lease } = service.selectAndClaim({
     strategy: service.settings.selection.strategy,
@@ -278,12 +362,37 @@ async function runWithStrategy(
   const rows = await service.reconcile();
   await service.collectUsage({ rows });
 
-  const { result, lease } = service.selectAndClaim({
+  const familyContext = await familyContextFor(service, adapter, codexArgs);
+  let familyBlocks = familyContext?.blocks ?? null;
+  if (familyContext !== null && familyContext.blocks.size > 0) {
+    warnToStderr(
+      `${familyContext.blocks.size} account(s) carry a ${familyContext.family} rate-limit record and are excluded`,
+    );
+  }
+
+  let { result, lease } = service.selectAndClaim({
     strategy,
     allowUnknown,
     purpose: "codex-session",
     cwd: process.cwd(),
+    familyBlocks,
   });
+  if (result.kind === "none" && familyContext !== null) {
+    const healable = healableBlockedKeys(result.exclusions);
+    if (healable.length > 0) {
+      const healed = await healBlocksOrNull(service, adapter, familyContext, healable);
+      if (healed !== null) {
+        familyBlocks = healed;
+        ({ result, lease } = service.selectAndClaim({
+          strategy,
+          allowUnknown,
+          purpose: "codex-session",
+          cwd: process.cwd(),
+          familyBlocks,
+        }));
+      }
+    }
+  }
   if (result.kind !== "selected" || lease === null) {
     return emitFailure(
       io,
@@ -294,6 +403,15 @@ async function runWithStrategy(
         details: {
           reason: result.kind === "none" ? result.reason : "unknown",
           nextReadyAt: result.kind === "none" ? result.nextReadyAt : null,
+          ...(familyContext !== null
+            ? {
+                familyFilter: {
+                  model: familyContext.model,
+                  family: familyContext.family,
+                  blockedAccounts: familyBlocks === null ? [] : [...familyBlocks.keys()],
+                },
+              }
+            : {}),
         },
       },
       ExitCode.noEligibleAccount,

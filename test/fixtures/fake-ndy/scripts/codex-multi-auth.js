@@ -60,6 +60,36 @@ const DEFAULT_HISTORY_DETAIL = {
   messages: ["first user message", "second user message"],
 };
 
+const DEFAULT_MODELS = {
+  command: "models",
+  matrix: {
+    entries: [
+      {
+        accountIndex: 1,
+        accountLabel: "Account 1",
+        model: "gpt-5.6-sol",
+        normalizedModel: "gpt-5.6-sol",
+        promptFamily: "gpt-5.2",
+      },
+    ],
+  },
+};
+
+const DEFAULT_FORECAST = {
+  command: "forecast",
+  liveProbe: false,
+  accounts: [
+    {
+      index: 0,
+      label: "Account 1 (person@example.com)",
+      availability: "ready",
+      waitMs: 0,
+      reasons: [],
+      liveQuota: null,
+    },
+  ],
+};
+
 function emitJson(envName, fallback) {
   if (process.env.FAKE_NDY_MALFORMED === "1") {
     process.stdout.write("this is not json {{{\n");
@@ -119,6 +149,59 @@ if (command === "history") {
     process.exit(0);
   }
   emitJson("FAKE_NDY_HISTORY_JSON", DEFAULT_HISTORY);
+  process.exit(0);
+}
+
+if (command === "models") {
+  emitJson("FAKE_NDY_MODELS_JSON", DEFAULT_MODELS);
+  process.exit(0);
+}
+
+if (command === "forecast") {
+  const live = args.includes("--live");
+  emitJson(
+    live ? "FAKE_NDY_FORECAST_LIVE_JSON" : "FAKE_NDY_FORECAST_JSON",
+    { ...DEFAULT_FORECAST, liveProbe: live },
+  );
+  process.exit(0);
+}
+
+if (command === "rotation" && args[1] === "reset-rate-limits") {
+  // Mirrors 2.8.5: --account counts from 1; the change entry reports the
+  // 0-based store index. Mutates the fake store so integration tests can
+  // observe the clear end to end.
+  const accountFlag = args.indexOf("--account");
+  const displayIndex = accountFlag >= 0 ? Number(args[accountFlag + 1]) : NaN;
+  const changes = [];
+  const storeDir = process.env.CODEX_MULTI_AUTH_DIR;
+  if (storeDir && Number.isInteger(displayIndex) && displayIndex >= 1) {
+    const storePath = path.join(storeDir, "openai-codex-accounts.json");
+    try {
+      const store = JSON.parse(readFileSync(storePath, "utf8"));
+      const account = store.accounts[displayIndex - 1];
+      if (account) {
+        const cleared = Object.keys(account.rateLimitResetTimes ?? {});
+        delete account.rateLimitResetTimes;
+        writeFileSync(storePath, JSON.stringify(store, null, 2));
+        changes.push({
+          index: displayIndex - 1,
+          label: `account ${displayIndex}`,
+          clearedRateLimitKeys: cleared,
+          clearedCoolingDown: false,
+        });
+      }
+    } catch {
+      // A missing fake store still produces a valid empty-change envelope.
+    }
+  }
+  emitJson("FAKE_NDY_RESET_JSON", {
+    ok: true,
+    dryRun: false,
+    scope: "account",
+    accountsScanned: 1,
+    accountsChanged: changes.length,
+    changes,
+  });
   process.exit(0);
 }
 

@@ -1,6 +1,14 @@
 import { parseArgs } from "node:util";
+import { createNdyAdapter } from "../../ndy/adapter.ts";
+import { NdyStoreReader } from "../../ndy/store-reader.ts";
+import {
+  healableBlockedKeys,
+  loadFamilyBlockContext,
+  verifyAndHealFamilyBlocks,
+} from "../../selection/family-blocks.ts";
 import { SnapshotService } from "../../snapshot/service.ts";
-import type { SelectionStrategy } from "../../selection/selector.ts";
+import type { FamilyBlock, SelectionStrategy } from "../../selection/selector.ts";
+import { dataRoot, familyVerifyStampPath } from "../../storage/paths.ts";
 import { commandIo, emitFailure, emitSuccess } from "../command-io.ts";
 import { mapCommandError } from "../errors.ts";
 import { ExitCode } from "../exit-codes.ts";
@@ -63,13 +71,63 @@ export async function runSelectCommand(args: string[]): Promise<number> {
     const rows = await service.reconcile();
     await service.collectUsage({ rows });
 
+    // Family filtering resolves the model from Codex config alone: select
+    // has no forwarded launch args. Dependency failures degrade to null.
+    const adapter = createNdyAdapter();
+    const familyContext = await loadFamilyBlockContext({
+      adapter,
+      reader: new NdyStoreReader(),
+      forwardedArgs: [],
+      enabled: service.settings.selection.familyFilter,
+      warn: io.json
+        ? undefined
+        : (message) => process.stderr.write(`codex-swap: ${message}\n`),
+    });
+    const familyFilterReport = (blocks: ReadonlyMap<string, FamilyBlock> | null) =>
+      familyContext === null
+        ? null
+        : {
+            model: familyContext.model,
+            family: familyContext.family,
+            blockedAccounts: [...(blocks ?? familyContext.blocks).keys()],
+          };
+
     if (parsed.values.claim) {
-      const { result, lease } = service.selectAndClaim({
+      let familyBlocks = familyContext?.blocks ?? null;
+      let { result, lease } = service.selectAndClaim({
         strategy,
         allowUnknown,
         purpose: "harness-claim",
         cwd: process.cwd(),
+        familyBlocks,
       });
+      // A claim is a launch precursor, so the advisory-record contract
+      // applies: live-verify records that are the sole obstacle, clear the
+      // disproved ones, and retry once. The read-only explain below never
+      // probes — explaining must stay side-effect-free.
+      if (result.kind === "none" && familyContext !== null) {
+        const healable = healableBlockedKeys(result.exclusions);
+        if (healable.length > 0) {
+          const outcome = await verifyAndHealFamilyBlocks({
+            adapter,
+            reader: new NdyStoreReader(),
+            context: familyContext,
+            healableKeys: healable,
+            stampPath: familyVerifyStampPath(dataRoot()),
+            minIntervalMs: service.settings.selection.familyVerifyMinIntervalMs,
+          });
+          if (outcome.kind === "healed" && outcome.clearedAccountKeys.length > 0) {
+            familyBlocks = outcome.blocks;
+            ({ result, lease } = service.selectAndClaim({
+              strategy,
+              allowUnknown,
+              purpose: "harness-claim",
+              cwd: process.cwd(),
+              familyBlocks,
+            }));
+          }
+        }
+      }
       if (result.kind !== "selected" || lease === null) {
         return emitFailure(
           io,
@@ -82,6 +140,7 @@ export async function runSelectCommand(args: string[]): Promise<number> {
               reason: result.kind === "none" ? result.reason : "unknown",
               nextReadyAt: result.kind === "none" ? result.nextReadyAt : null,
               exclusions: result.kind === "none" ? result.exclusions : [],
+              familyFilter: familyFilterReport(familyBlocks),
             },
           },
           ExitCode.noEligibleAccount,
@@ -96,6 +155,7 @@ export async function runSelectCommand(args: string[]): Promise<number> {
           status: lease.status,
           expiresAt: toIsoUtc(lease.expiresAtMs),
         },
+        familyFilter: familyFilterReport(familyBlocks),
       });
       if (!io.json) {
         process.stdout.write(
@@ -105,7 +165,11 @@ export async function runSelectCommand(args: string[]): Promise<number> {
       return ExitCode.success;
     }
 
-    const result = service.selectReadOnly({ strategy, allowUnknown });
+    const result = service.selectReadOnly({
+      strategy,
+      allowUnknown,
+      familyBlocks: familyContext?.blocks ?? null,
+    });
     if (result.kind !== "selected") {
       return emitFailure(
         io,
@@ -118,12 +182,17 @@ export async function runSelectCommand(args: string[]): Promise<number> {
             reason: result.reason,
             nextReadyAt: result.nextReadyAt,
             exclusions: result.exclusions,
+            familyFilter: familyFilterReport(null),
           },
         },
         ExitCode.noEligibleAccount,
       );
     }
-    emitSuccess(io, { selection: result, lease: null });
+    emitSuccess(io, {
+      selection: result,
+      lease: null,
+      familyFilter: familyFilterReport(null),
+    });
     if (!io.json) {
       process.stdout.write(
         `${result.accountKey}  ${result.reason.summary} (score ${result.reason.score.toFixed(1)})\n`,

@@ -57,3 +57,65 @@ export const ndyHistoryDetailSchema = ndyHistorySummarySchema.extend({
 });
 
 export type NdyHistoryDetail = z.infer<typeof ndyHistoryDetailSchema>;
+
+/**
+ * `models --json --model <m>`: the per-account × per-model matrix. Consumed
+ * only for `promptFamily` — ndy's mapping from a model id to the family key
+ * its per-family rate-limit records are stored under. The family is a
+ * property of the model, so any entry that carries one is authoritative.
+ */
+export const ndyModelsMatrixSchema = z.looseObject({
+  matrix: z.looseObject({
+    entries: z.array(
+      z.looseObject({
+        model: z.string().nullish(),
+        normalizedModel: z.string().nullish(),
+        promptFamily: z.string().nullish(),
+      }),
+    ),
+  }),
+});
+
+export type NdyModelsMatrix = z.infer<typeof ndyModelsMatrixSchema>;
+
+/**
+ * `forecast --json [--live]`: per-account availability. Used exclusively in
+ * live mode to verify a persisted family rate-limit record against the
+ * provider: `liveQuota.status` is the actual probe response for the
+ * requested model, unlike the cached availability fields, whose record
+ * cross-check in 2.8.5 is hardwired to the codex family.
+ */
+export const ndyForecastAccountSchema = z.looseObject({
+  index: z.int().nonnegative(),
+  availability: z.string(),
+  waitMs: z.number(),
+  reasons: z.array(z.string()).nullish(),
+  liveQuota: z
+    .looseObject({
+      status: z.number(),
+    })
+    .nullish(),
+});
+
+export const ndyForecastSchema = z.looseObject({
+  liveProbe: z.boolean(),
+  accounts: z.array(ndyForecastAccountSchema),
+});
+
+export type NdyForecast = z.infer<typeof ndyForecastSchema>;
+
+/** `rotation reset-rate-limits --account <displayIndex> --json`. */
+export const ndyRateLimitResetSchema = z.looseObject({
+  ok: z.boolean(),
+  dryRun: z.boolean().nullish(),
+  changes: z
+    .array(
+      z.looseObject({
+        index: z.int().nonnegative(),
+        clearedRateLimitKeys: z.array(z.string()).nullish(),
+      }),
+    )
+    .nullish(),
+});
+
+export type NdyRateLimitReset = z.infer<typeof ndyRateLimitResetSchema>;

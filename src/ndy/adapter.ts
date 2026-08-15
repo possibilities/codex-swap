@@ -6,11 +6,16 @@ import {
 } from "./bin-resolver.ts";
 import { withNdyContainment } from "./environment.ts";
 import {
+  ndyForecastSchema,
   ndyHistoryDetailSchema,
   ndyHistoryListSchema,
+  ndyModelsMatrixSchema,
+  ndyRateLimitResetSchema,
   ndyStatusSchema,
+  type NdyForecast,
   type NdyHistoryDetail,
   type NdyHistoryList,
+  type NdyRateLimitReset,
   type NdyStatus,
 } from "./schemas.ts";
 import {
@@ -101,6 +106,63 @@ export class NdyAdapter {
 
   async status(): Promise<NdyStatus> {
     return this.managerJson(["status", "--json"], ndyStatusSchema);
+  }
+
+  /**
+   * Resolves a model id to ndy's prompt-family key — the key its per-family
+   * rate-limit records are stored under. Returns null when ndy reports no
+   * family (an unknown model), so callers degrade to unfiltered selection
+   * rather than guessing.
+   */
+  async promptFamilyForModel(model: string): Promise<string | null> {
+    if (model.length === 0 || model.startsWith("-")) {
+      throw new NdyContractError(`invalid model id: '${model}'`);
+    }
+    const parsed = await this.managerJson(
+      ["models", "--json", "--model", model],
+      ndyModelsMatrixSchema,
+    );
+    for (const entry of parsed.matrix.entries) {
+      if (typeof entry.promptFamily === "string" && entry.promptFamily.length > 0) {
+        return entry.promptFamily;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Per-account availability forecast. Live mode probes the provider with
+   * the given model and is the only trustworthy verdict on a persisted
+   * family rate-limit record: 2.8.5's cached forecast cross-checks records
+   * against the codex family regardless of the model asked about.
+   */
+  async forecast(
+    model: string | null,
+    options?: { live?: boolean },
+  ): Promise<NdyForecast> {
+    if (model !== null && (model.length === 0 || model.startsWith("-"))) {
+      throw new NdyContractError(`invalid model id: '${model}'`);
+    }
+    const args = ["forecast", "--json"];
+    if (model !== null) args.push("--model", model);
+    if (options?.live === true) args.push("--live");
+    return this.managerJson(args, ndyForecastSchema);
+  }
+
+  /**
+   * Clears an account's persisted per-family rate-limit records. Only called
+   * after a live probe disproves the record — clearing a record the provider
+   * still enforces would just move the failure back to mid-session. Takes
+   * the 0-based ndy store index; the CLI flag counts from 1.
+   */
+  async resetRateLimits(ndyIndex: number): Promise<NdyRateLimitReset> {
+    if (!Number.isInteger(ndyIndex) || ndyIndex < 0) {
+      throw new NdyContractError(`invalid ndy account index: ${ndyIndex}`);
+    }
+    return this.managerJson(
+      ["rotation", "reset-rate-limits", "--account", String(ndyIndex + 1), "--json"],
+      ndyRateLimitResetSchema,
+    );
   }
 
   async historyList(): Promise<NdyHistoryList> {

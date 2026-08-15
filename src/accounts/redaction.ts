@@ -18,6 +18,12 @@ export interface RedactedNdyAccount {
   authInvalidationErrorCode?: string;
   coolingDownUntil?: number;
   cooldownReason?: string;
+  /**
+   * ndy's per-family rate-limit records: prompt-family key → epoch ms when
+   * the recorded limit ends. Written by ndy from provider responses and
+   * preemptive quota marks; advisory (a record can outlive the real limit).
+   */
+  rateLimitResetTimes?: Record<string, number>;
   /** True when the stored record currently has a refresh token. */
   hasCredentials: boolean;
   /**
@@ -43,6 +49,7 @@ export interface NdyAccountRecordLike {
   authInvalidationErrorCode?: string | undefined;
   coolingDownUntil?: number | undefined;
   cooldownReason?: string | undefined;
+  rateLimitResetTimes?: Record<string, unknown> | undefined;
 }
 
 export function redactNdyAccount(
@@ -81,6 +88,17 @@ export function redactNdyAccount(
   }
   if (record.cooldownReason !== undefined) {
     redacted.cooldownReason = record.cooldownReason;
+  }
+  if (record.rateLimitResetTimes !== undefined) {
+    const resetTimes: Record<string, number> = {};
+    for (const [family, resetAt] of Object.entries(record.rateLimitResetTimes)) {
+      if (typeof resetAt === "number" && Number.isFinite(resetAt)) {
+        resetTimes[family] = resetAt;
+      }
+    }
+    if (Object.keys(resetTimes).length > 0) {
+      redacted.rateLimitResetTimes = resetTimes;
+    }
   }
   return redacted;
 }
