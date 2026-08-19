@@ -82,8 +82,9 @@ export type NdyModelsMatrix = z.infer<typeof ndyModelsMatrixSchema>;
  * `forecast --json [--live]`: per-account availability. Used exclusively in
  * live mode to verify a persisted family rate-limit record against the
  * provider: `liveQuota.status` is the actual probe response for the
- * requested model, unlike the cached availability fields, whose record
- * cross-check in 2.8.5 is hardwired to the codex family.
+ * requested model, unlike the cached availability fields, which only
+ * cross-check stored records (2.8.6 fixed their lookup to the requested
+ * model's family; before that it was hardwired to the codex family).
  */
 export const ndyForecastAccountSchema = z.looseObject({
   index: z.int().nonnegative(),

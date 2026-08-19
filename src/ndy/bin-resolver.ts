@@ -19,7 +19,7 @@ export interface NdyInstallation {
 }
 
 /** Exact versions this codebase has been tested against (handoff §8, §34). */
-export const SUPPORTED_NDY_VERSIONS: readonly string[] = ["2.8.5"];
+export const SUPPORTED_NDY_VERSIONS: readonly string[] = ["2.8.6"];
 
 export class NdyResolutionError extends Error {}
 

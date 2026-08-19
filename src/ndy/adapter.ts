@@ -132,9 +132,10 @@ export class NdyAdapter {
 
   /**
    * Per-account availability forecast. Live mode probes the provider with
-   * the given model and is the only trustworthy verdict on a persisted
-   * family rate-limit record: 2.8.5's cached forecast cross-checks records
-   * against the codex family regardless of the model asked about.
+   * the given model and is the only provider-verified verdict on a persisted
+   * family rate-limit record: the cached forecast only cross-checks stored
+   * records (against the requested model's family since 2.8.6; hardwired to
+   * the codex family before that).
    */
   async forecast(
     model: string | null,
