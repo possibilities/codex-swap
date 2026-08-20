@@ -102,7 +102,7 @@ function emitJson(envName, fallback) {
 const command = args[0];
 
 if (args.length === 1 && (command === "--version" || command === "-v")) {
-  process.stdout.write("2.8.6\n");
+  process.stdout.write("2.8.7\n");
   process.exit(0);
 }
 
@@ -167,7 +167,7 @@ if (command === "forecast") {
 }
 
 if (command === "rotation" && args[1] === "reset-rate-limits") {
-  // Mirrors 2.8.6: --account counts from 1; the change entry reports the
+  // Mirrors 2.8.7: --account counts from 1; the change entry reports the
   // 0-based store index. Mutates the fake store so integration tests can
   // observe the clear end to end.
   const accountFlag = args.indexOf("--account");

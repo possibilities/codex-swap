@@ -2,11 +2,10 @@
 # codex-swap installer. Owns the `codex-swap` command and, only while the
 # switch below is on, a managed codex-multi-auth fork that command binds to.
 #
-# The switch is on again while we carry the prompt-bearing-TUI canonical-home
-# fix (upstream ndycode/codex-multi-auth#673, PR #674): released 2.8.6 still
-# classifies `codex [OPTIONS] [PROMPT]` as a noninteractive command and stalls
-# ~55s rebuilding the thread index in a shadow home. Flip back to 0 once a
-# release carries the fix.
+# The switch is off: 2.8.7 released both patches the fork was carrying —
+# the prompt-bearing-TUI canonical home (#673/#674) and the pinned-503 blocker
+# wording (#675/#676) — so the exact npm pin ships them and the checkout is no
+# longer consulted. Turn it back on only for a fresh unreleased patch.
 #
 # Safe to re-run.
 set -uo pipefail
@@ -17,7 +16,7 @@ STATE_DIR="${CODEX_SWAP_INSTALL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}
 RECEIPT="$STATE_DIR/install-receipt"
 # 1 while we carry a patch upstream has not released; 0 uses the exact npm pin.
 # Nothing else in this file needs editing to switch between them.
-NDY_FORK_ACTIVE=1
+NDY_FORK_ACTIVE=0
 NDY_CHECKOUT="${CODEX_SWAP_NDY_CHECKOUT:-$HOME/src/codex-multi-auth}"
 NDY_FORK_URL="${CODEX_SWAP_NDY_FORK_URL:-https://github.com/possibilities/codex-multi-auth.git}"
 NDY_UPSTREAM_URL="https://github.com/ndycode/codex-multi-auth.git"
@@ -252,12 +251,6 @@ install_ndy_fork() {
     if ! grep -q 'sweepStaleRuntimeRotationAppHelperMetadata' "${NDY_CHECKOUT}/scripts/codex.js" ||
        ! grep -q 'DEFAULT_APP_RUNTIME_HELPER_DETACHED_IDLE_MS' "${NDY_CHECKOUT}/scripts/codex.js"; then
         printf 'codex-swap install: %s does not carry the runtime helper-leak fix; refusing.\n' \
-            "${NDY_CHECKOUT}" >&2
-        return 1
-    fi
-    if ! grep -q 'insertArgsBeforeRootPrompt' "${NDY_CHECKOUT}/scripts/codex.js" ||
-       ! grep -q 'resolveCodexRootCommand' "${NDY_CHECKOUT}/scripts/codex.js"; then
-        printf 'codex-swap install: %s does not carry the prompt-TUI canonical-home fix (#673); refusing.\n' \
             "${NDY_CHECKOUT}" >&2
         return 1
     fi
