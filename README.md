@@ -111,6 +111,21 @@ lease=$(codex-swap select --claim --json | jq -r .data.lease.leaseId)
 codex-swap run --claim "$lease" -- exec "task"
 ```
 
+The same foreground launch contract supports a caller-owned Codex App Server
+without reviving codex-swap's retired sidecar subsystem. The caller supplies
+the listener, config overrides, and lifecycle; codex-swap only consumes the
+claim, pins the account, and heartbeats the ordinary invocation lease:
+
+```sh
+codex-swap run --claim "$lease" -- \
+  -c 'plugins."agent@agentstart-managed".enabled=false' \
+  app-server --listen unix:///tmp/caller-owned.sock
+```
+
+Arguments after `--` are forwarded byte-for-byte. There is deliberately no
+`codex-swap app-server` registry, resident process, attach protocol, or
+automatic remote-TUI composition.
+
 Concurrent harnesses calling `select --claim` are serialized through SQLite
 immediate transactions. Two simultaneous claims land on different accounts when
 capacity allows, and the `policy.maxConcurrent` /
@@ -135,9 +150,10 @@ TUI repaints while a daemon owns fetching.
   display-grade and decision-grade data are separate in the schema.
 - **One canonical `CODEX_HOME`.** All sessions share one rollout store, so
   any session UUID resumes under any usable account.
-- **Standalone native launches.** `run` and `resume` invoke the native Codex
-  CLI through ndy's forced-account wrapper. codex-swap no longer starts,
-  registers, or attaches dedicated Codex app-server sidecars.
+- **Caller-owned native launches.** `run` and `resume` invoke the native Codex
+  CLI through ndy's forced-account wrapper. A caller may forward a foreground
+  `app-server` invocation through `run`, but codex-swap never registers,
+  retains, attaches, or composes remote clients for it.
 - **Secret-free surfaces.** Raw tokens never enter the codex-swap database,
   JSON output, logs, or errors; logs additionally redact emails, JWTs, and
   callback URLs.

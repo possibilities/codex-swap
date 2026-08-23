@@ -1393,9 +1393,14 @@ codex-swap select --strategy best --claim --json
 codex-swap run --strategy best -- <codex args>
 codex-swap run --account <selector> -- <codex args>
 codex-swap run --claim <lease-id> -- <codex args>
+codex-swap run --claim <lease-id> -- -c <config> app-server --listen <endpoint>
 ```
 
 `select` without `--claim` is observational. `run --strategy` performs claim and launch as one workflow.
+The final shape is the foreground App Server invocation contract: arguments
+after `--` remain byte-for-byte Codex argv, the ordinary invocation lease is
+heartbeated for the child lifetime, and the caller owns the endpoint, clients,
+and termination. It creates no codex-swap registry or resident lifecycle.
 
 ### 21.2 Lease lifecycle
 
@@ -2360,6 +2365,12 @@ proxies dedicated Codex app-server sidecars. The product boundary is back to
 the original one-shot data and invocation layer: `run`, `resume`, and
 `pi run` choose an account, take an invocation lease, and launch the native
 Codex or Pi process directly.
+
+This does not forbid a foreground App Server invocation: `run` may forward
+`-c ... app-server --listen ...` exactly like any other official Codex argv.
+That child holds an ordinary invocation lease and is wholly caller-owned;
+codex-swap keeps no endpoint record, process registry, attach path, or special
+lease purpose. This distinction is the contract AgentLaunch binds.
 
 The removed surface included:
 

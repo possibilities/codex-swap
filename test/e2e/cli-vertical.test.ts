@@ -182,6 +182,39 @@ test("run pins by provider account id resolved from account key selector", async
   ]);
 });
 
+test("run formalizes a caller-owned foreground App Server invocation", async () => {
+  const world = makeWorld();
+  const result = await runCli(
+    [
+      "run",
+      "--account",
+      "record:r1",
+      "--",
+      "-c",
+      'plugins."agent@agentstart-managed".enabled=false',
+      "-c",
+      'skills.config=[{path="/capabilities/build/SKILL.md",enabled=true}]',
+      "app-server",
+      "--listen",
+      "unix:///tmp/caller-owned.sock",
+    ],
+    world.env,
+  );
+  assert.equal(result.code, 0, result.stderr);
+  const wrapperCalls = invocations(world.recordDir).filter((r) => r.bin === "codex");
+  assert.deepEqual(wrapperCalls[0]?.argv, [
+    "--account",
+    "acc_1",
+    "-c",
+    'plugins."agent@agentstart-managed".enabled=false',
+    "-c",
+    'skills.config=[{path="/capabilities/build/SKILL.md",enabled=true}]',
+    "app-server",
+    "--listen",
+    "unix:///tmp/caller-owned.sock",
+  ]);
+});
+
 test("run no longer accepts codex-swap-owned server sidecar flags", async () => {
   const world = makeWorld();
   const result = await runCli(

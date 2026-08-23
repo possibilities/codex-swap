@@ -57,6 +57,12 @@ Codex homes.
 **Forced account** — An ephemeral account pin applied to one wrapper
 invocation. Never changes ndy's persisted active or pinned account.
 
+**Foreground App Server invocation** — A normal lease-backed `run` whose
+forwarded Codex argv selects `app-server`; the caller owns its listener,
+lifetime, and client connections, while codex-swap only pins the account and
+heartbeats the invocation lease.
+_Avoid_: "sidecar", "resident server", or implying an app-server registry.
+
 **Family block** — An active per-family rate-limit record in ndy's store
 (`rateLimitResetTimes`), resolved against the launch's model family and
 excluding that account from selection (`family_rate_limited`). Advisory:
