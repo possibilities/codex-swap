@@ -24,14 +24,21 @@ export const PROFILE_SCHEMA_VERSION = 1;
  * whole sharing mechanism for history — an explicit
  * PI_CODING_AGENT_SESSION_DIR would flatten pi's project-nested layout, so
  * it is never set.
+ *
+ * Every name here must be a directory pi actually reads. "prompts" is pi's
+ * prompt-template directory — it was long spelled "prompt-templates" here,
+ * which shared nothing, invisibly so while nothing installed a template.
+ * "tools" was pi's pre-migration name for "bin" and shared nothing either.
+ * "agents" holds the user-scope subagent definitions pi-subagents discovers,
+ * which a pinned launch must see exactly as a bare one does.
  */
 const SHARED_CHILDREN = [
   "sessions",
   "extensions",
   "skills",
   "themes",
-  "prompt-templates",
-  "tools",
+  "prompts",
+  "agents",
   "settings.json",
   "models.json",
   "models-store.json",
