@@ -111,6 +111,17 @@ lease=$(codex-swap select --claim --json | jq -r .data.lease.leaseId)
 codex-swap run --claim "$lease" -- exec "task"
 ```
 
+To preserve an external policy pin while retaining the same eligibility and
+lease accounting, restrict selection to an exact account key:
+
+```sh
+lease=$(codex-swap select --account 'record:<record-id>' --claim --json | jq -r .data.lease.leaseId)
+codex-swap run --claim "$lease" -- exec "task"
+```
+
+The pinned account must remain eligible; `select --account` fails closed and
+never substitutes another account.
+
 The same foreground launch contract supports a caller-owned Codex App Server
 without reviving codex-swap's retired sidecar subsystem. The caller supplies
 the listener, config overrides, and lifecycle; codex-swap only consumes the

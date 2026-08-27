@@ -197,6 +197,40 @@ test("concurrent claims acquire different accounts", async () => {
   }
 });
 
+test("select --account claims only an eligible pinned account", async () => {
+  const server = await startServer();
+  try {
+    const world = makeWorld(server.url);
+    await runCli(["usage", "refresh", "--json"], world.env);
+
+    const pinned = await runCli(
+      ["select", "--account", "record:r2", "--claim", "--json"],
+      world.env,
+    );
+    assert.equal(pinned.code, 0, pinned.stderr);
+    const pinnedEnvelope = JSON.parse(pinned.stdout) as ClaimEnvelope;
+    assert.equal(pinnedEnvelope.data?.selection.accountKey, "record:r2");
+    assert.equal(pinnedEnvelope.data?.lease.accountKey, "record:r2");
+
+    const refused = await runCli(
+      ["select", "--account", "record:r2", "--claim", "--json"],
+      world.env,
+    );
+    assert.equal(refused.code, 3, "a pinned claim must not fall back to another account");
+    const refusedEnvelope = JSON.parse(refused.stdout) as ClaimEnvelope;
+    assert.equal(refusedEnvelope.error?.code, "NO_ELIGIBLE_ACCOUNT");
+    const exclusions = refusedEnvelope.error?.details?.["exclusions"] as Array<{
+      accountKey: string;
+      exclusions: string[];
+    }>;
+    assert.deepEqual(exclusions, [
+      { accountKey: "record:r2", exclusions: ["max_concurrent_reached"] },
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
 test("run --strategy claims, pins, launches, and releases with the child exit code", async () => {
   const server = await startServer();
   try {

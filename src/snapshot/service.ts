@@ -345,6 +345,8 @@ export class SnapshotService {
     cwd?: string | undefined;
     /** Skip selection: claim this specific account (explicit targeting). */
     forcedAccountKey?: string;
+    /** Restrict normal eligibility/scoring to this account (balanced pinning). */
+    requiredAccountKey?: string;
     /**
      * Harness capability gate: accounts outside `keys` are excluded with
      * `reason` (e.g. pi_profile_missing — quota alone cannot make an
@@ -412,7 +414,11 @@ export class SnapshotService {
         };
       } else {
         result = selectAccount({
-          accounts: views.filter((a) => a.present),
+          accounts: views.filter(
+            (account) =>
+              account.present &&
+              (options.requiredAccountKey === undefined || account.accountKey === options.requiredAccountKey),
+          ),
           strategy: options.strategy,
           settings: this.settings.selection,
           allowUnknown: options.allowUnknown,
@@ -449,13 +455,19 @@ export class SnapshotService {
   selectReadOnly(options: {
     strategy: SelectionStrategy;
     allowUnknown: boolean;
+    /** Restrict normal eligibility/scoring to this account (balanced pinning). */
+    requiredAccountKey?: string;
     familyBlocks?: ReadonlyMap<string, FamilyBlock> | null;
   }): SelectionResult {
     return this.db.immediate(() => {
       this.leases.expireStaleLocked();
       const views = this.assembleViewsLocked(this.catalog.listAll());
       return selectAccount({
-        accounts: views.filter((a) => a.present),
+        accounts: views.filter(
+          (account) =>
+            account.present &&
+            (options.requiredAccountKey === undefined || account.accountKey === options.requiredAccountKey),
+        ),
         strategy: options.strategy,
         settings: this.settings.selection,
         allowUnknown: options.allowUnknown,

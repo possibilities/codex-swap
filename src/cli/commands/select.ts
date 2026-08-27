@@ -14,12 +14,15 @@ import { mapCommandError } from "../errors.ts";
 import { ExitCode } from "../exit-codes.ts";
 import { toIsoUtc } from "../../util/clock.ts";
 
-const USAGE = `Usage: codex-swap select [--strategy best|next-available] [--claim] [--allow-unknown] [--json]
+const USAGE = `Usage: codex-swap select [--strategy best|next-available] [--account <account-key>] [--claim] [--allow-unknown] [--json]
 
 Explains which account automatic selection would choose — or, with --claim,
 atomically reserves an invocation lease on it so concurrent harnesses
 balance instead of racing. A claim must be consumed with
 'codex-swap run --claim <lease-id> -- ...' before it expires.
+
+--account restricts the balanced selection to one exact account key. The
+account must pass the same eligibility gates as an automatic selection.
 `;
 
 export async function runSelectCommand(args: string[]): Promise<number> {
@@ -29,6 +32,7 @@ export async function runSelectCommand(args: string[]): Promise<number> {
       args,
       options: {
         strategy: { type: "string" },
+        account: { type: "string" },
         claim: { type: "boolean", default: false },
         "allow-unknown": { type: "boolean", default: false },
         json: { type: "boolean", default: false },
@@ -67,6 +71,7 @@ export async function runSelectCommand(args: string[]): Promise<number> {
       requestedStrategy ?? service.settings.selection.strategy;
     const allowUnknown =
       parsed.values["allow-unknown"] || service.settings.selection.allowUnknown;
+    const requiredAccountKey = parsed.values.account;
 
     const rows = await service.reconcile();
     await service.collectUsage({ rows });
@@ -99,6 +104,7 @@ export async function runSelectCommand(args: string[]): Promise<number> {
         allowUnknown,
         purpose: "harness-claim",
         cwd: process.cwd(),
+        requiredAccountKey,
         familyBlocks,
       });
       // A claim is a launch precursor, so the advisory-record contract
@@ -123,6 +129,7 @@ export async function runSelectCommand(args: string[]): Promise<number> {
               allowUnknown,
               purpose: "harness-claim",
               cwd: process.cwd(),
+              requiredAccountKey,
               familyBlocks,
             }));
           }
@@ -168,6 +175,7 @@ export async function runSelectCommand(args: string[]): Promise<number> {
     const result = service.selectReadOnly({
       strategy,
       allowUnknown,
+      requiredAccountKey,
       familyBlocks: familyContext?.blocks ?? null,
     });
     if (result.kind !== "selected") {

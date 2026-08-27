@@ -1389,14 +1389,16 @@ Commands:
 
 ```text
 codex-swap select --strategy best --json
-codex-swap select --strategy best --claim --json
+codex-swap select --strategy best [--account <account-key>] --claim --json
 codex-swap run --strategy best -- <codex args>
 codex-swap run --account <selector> -- <codex args>
 codex-swap run --claim <lease-id> -- <codex args>
 codex-swap run --claim <lease-id> -- -c <config> app-server --listen <endpoint>
 ```
 
-`select` without `--claim` is observational. `run --strategy` performs claim and launch as one workflow.
+`select` without `--claim` is observational. `select --account` restricts the
+normal eligibility gate to one exact account key and never substitutes another
+account. `run --strategy` performs claim and launch as one workflow.
 The final shape is the foreground App Server invocation contract: arguments
 after `--` remain byte-for-byte Codex argv, the ordinary invocation lease is
 heartbeated for the child lifetime, and the caller owns the endpoint, clients,
@@ -1546,7 +1548,7 @@ Suggested initial commands:
 | `codex-swap snapshot --json` | Coherent machine-facing account, usage, health, and recommendation snapshot |
 | `codex-swap usage [selector] [--json]` | Store-governed usage view; may fetch only eligible due accounts |
 | `codex-swap usage refresh [selector] [--json]` | Request refresh while still honoring claim/backoff safety |
-| `codex-swap select [--strategy best] [--claim] --json` | Explain or atomically claim a selection |
+| `codex-swap select [--strategy best] [--account <account-key>] [--claim] --json` | Explain or atomically claim an automatic or pinned eligible selection |
 | `codex-swap run --strategy best -- ...` | Claim, pin, and launch Codex |
 | `codex-swap run --account <selector> -- ...` | Explicit pinned launch |
 | `codex-swap history [list] --json` | Provider-independent session list |
