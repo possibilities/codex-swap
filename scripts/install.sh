@@ -51,9 +51,11 @@ NODE_MAJOR="$("$NODE_BIN" -p 'process.versions.node.split(".")[0]' 2>/dev/null |
 # ── retired Pi state ────────────────────────────────────────────────────────
 # The removed integration owned one exact subtree under codex-swap's data
 # root, lease/event rows with one exact purpose, and top-level command="pi"
-# JSONL records. Preflight proves those boundaries before any mutation. A
-# failed cleanup aborts installation rather than removing the command that
-# formerly exposed unlink/prune while credential-bearing profiles remain.
+# JSONL records in the current and one rotated generation. Preflight proves
+# those boundaries before any mutation; append-stable log redaction and
+# deletion-time profile claims close the two concurrent-writer races. A failed
+# cleanup aborts installation rather than removing the command that formerly
+# exposed unlink/prune while credential-bearing profiles remain.
 retire_pi_state() {
     if (( DRY )); then
         "${NODE_BIN}" "${ROOT}/scripts/retire-pi-state.mjs" --dry-run

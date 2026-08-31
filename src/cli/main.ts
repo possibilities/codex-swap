@@ -102,14 +102,25 @@ dispatch(process.argv.slice(2)).then(
 );
 
 function logCompletion(exitCode: number, errorMessage?: string): void {
-  const command = process.argv[2];
-  if (command === undefined) return;
+  const rawCommand = process.argv[2];
+  if (rawCommand === undefined) return;
   logToFile(dataRoot(process.env), {
     event: "command_completed",
     level: exitCode === 0 ? "info" : "warn",
-    command,
+    command: canonicalLogCommand(rawCommand),
     exitCode,
     durationMs: Date.now() - startedAt,
     ...(errorMessage !== undefined ? { error: errorMessage } : {}),
   });
+}
+
+function canonicalLogCommand(command: string): string {
+  if (commands.has(command)) return command;
+  if (command === "version" || command === "--version" || command === "-V") {
+    return "version";
+  }
+  if (command === "help" || command === "--help" || command === "-h") {
+    return "help";
+  }
+  return "unknown";
 }

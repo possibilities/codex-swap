@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -30,6 +33,7 @@ interface World {
   dbPath: string;
   piRoot: string;
   logPath: string;
+  rotatedLogPath: string;
   keptLog: string;
   retiredLog: string;
   externalTarget: string;
@@ -142,6 +146,7 @@ function makeWorld(options?: { foreignProfile?: boolean }): World {
     dbPath,
     piRoot,
     logPath,
+    rotatedLogPath: `${logPath}.1`,
     keptLog,
     retiredLog,
     externalTarget: path.join(root, "canonical-sessions"),
@@ -166,6 +171,81 @@ function runInstaller(
     encoding: "utf8",
     timeout: 30_000,
   });
+}
+
+interface InstallerResult {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}
+
+function hookMarker(world: World, point: string, state: "ready" | "release"): string {
+  return path.join(world.data, `.retire-pi-test-${point}.${state}`);
+}
+
+async function waitForFile(target: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (!existsSync(target)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for ${target}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function runInstallerAtHook(
+  world: World,
+  point: "log-snapshot" | "log-verification" | "profile-claim",
+  action: () => void,
+): Promise<InstallerResult> {
+  const child = spawn("bash", [INSTALL, "--install"], {
+    env: {
+      ...installerEnv(world),
+      CODEX_SWAP_RETIRE_TEST_HOOK: point,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const completion = new Promise<InstallerResult>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (status, signal) => {
+      resolve({ status, signal, stdout, stderr });
+    });
+  });
+  const timeout = setTimeout(() => child.kill("SIGKILL"), 30_000);
+  try {
+    await waitForFile(hookMarker(world, point, "ready"));
+    action();
+    writeFileSync(hookMarker(world, point, "release"), "continue\n", {
+      flag: "wx",
+      mode: 0o600,
+    });
+    return await completion;
+  } catch (error) {
+    child.kill("SIGKILL");
+    await completion.catch(() => undefined);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function cleanedLog(world: World, suffix = ""): string {
+  return `${world.keptLog}${blankRetiredLog(world)}{"partial":\n${suffix}`;
+}
+
+function blankRetiredLog(world: World): string {
+  return `${" ".repeat(Buffer.byteLength(world.retiredLog) - 1)}\n`;
 }
 
 test(
@@ -255,7 +335,7 @@ test(
     );
     assert.deepEqual(retiredCounts(world.dbPath), { leases: 0, events: 0 });
     assert.deepEqual(codexState(world.dbPath), before);
-    assert.equal(readFileSync(world.logPath, "utf8"), `${world.keptLog}{"partial":\n`);
+    assert.equal(readFileSync(world.logPath, "utf8"), cleanedLog(world));
     for (const candidate of [
       world.dbPath,
       `${world.dbPath}-wal`,
@@ -271,7 +351,7 @@ test(
     const second = runInstaller(world);
     assert.equal(second.status, 0, `${second.stdout}\n${second.stderr}`);
     assert.deepEqual(codexState(world.dbPath), afterFirst);
-    assert.equal(readFileSync(world.logPath, "utf8"), `${world.keptLog}{"partial":\n`);
+    assert.equal(readFileSync(world.logPath, "utf8"), cleanedLog(world));
   },
 );
 
@@ -291,6 +371,157 @@ test(
     assert.ok(readFileSync(world.logPath, "utf8").includes(world.retiredLog));
     assert.equal(existsSync(path.join(world.bin, "codex-swap")), false);
     assert.equal(existsSync(path.join(world.state, "install-receipt")), false);
+  },
+);
+
+test(
+  "log retirement preserves an append that lands during redaction exactly once",
+  { skip: !POSIX },
+  async (context) => {
+    const world = makeWorld();
+    context.after(() => rmSync(world.root, { recursive: true, force: true }));
+    const concurrent =
+      '{"event":"command_completed","command":"run","concurrent":true}\n';
+    const result = await runInstallerAtHook(world, "log-snapshot", () => {
+      appendFileSync(world.logPath, concurrent, { encoding: "utf8" });
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(result.signal, null);
+    const after = readFileSync(world.logPath, "utf8");
+    assert.equal(after, cleanedLog(world, concurrent));
+    assert.equal(after.indexOf(concurrent), after.lastIndexOf(concurrent));
+    assert.equal(after.includes(world.retiredLog), false);
+  },
+);
+
+test(
+  "log retirement cleans the exact rotated generation",
+  { skip: !POSIX },
+  (context) => {
+    const world = makeWorld();
+    context.after(() => rmSync(world.root, { recursive: true, force: true }));
+    const rotatedKept = '{"event":"rotated","command":"run"}\n';
+    writeFileSync(
+      world.rotatedLogPath,
+      `${rotatedKept}${world.retiredLog}`,
+      { mode: 0o600 },
+    );
+
+    const result = runInstaller(world);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(String(result.stdout), /2 log record/);
+    assert.equal(
+      readFileSync(world.rotatedLogPath, "utf8"),
+      `${rotatedKept}${blankRetiredLog(world)}`,
+    );
+    assert.equal(readFileSync(world.logPath, "utf8"), cleanedLog(world));
+  },
+);
+
+test(
+  "log retirement follows the opened inode through a concurrent rotation",
+  { skip: !POSIX },
+  async (context) => {
+    const world = makeWorld();
+    context.after(() => rmSync(world.root, { recursive: true, force: true }));
+    const concurrent =
+      '{"event":"command_completed","command":"run","afterRotation":true}\n';
+    const result = await runInstallerAtHook(world, "log-snapshot", () => {
+      renameSync(world.logPath, world.rotatedLogPath);
+      appendFileSync(world.logPath, concurrent, { encoding: "utf8", mode: 0o600 });
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(readFileSync(world.rotatedLogPath, "utf8"), cleanedLog(world));
+    assert.equal(readFileSync(world.logPath, "utf8"), concurrent);
+    const allLogs = `${readFileSync(world.rotatedLogPath, "utf8")}${readFileSync(world.logPath, "utf8")}`;
+    assert.equal(allLogs.indexOf(concurrent), allLogs.lastIndexOf(concurrent));
+    assert.equal(allLogs.includes(world.retiredLog), false);
+  },
+);
+
+test(
+  "log verification refuses a rotation between generation snapshots",
+  { skip: !POSIX },
+  async (context) => {
+    const world = makeWorld();
+    context.after(() => rmSync(world.root, { recursive: true, force: true }));
+    const concurrent =
+      '{"event":"command_completed","command":"run","duringVerification":true}\n';
+    const refused = await runInstallerAtHook(world, "log-verification", () => {
+      renameSync(world.logPath, world.rotatedLogPath);
+      appendFileSync(world.logPath, concurrent, { encoding: "utf8", mode: 0o600 });
+    });
+
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /logs changed during inspection; rerun/);
+    assert.equal(readFileSync(world.rotatedLogPath, "utf8"), cleanedLog(world));
+    assert.equal(readFileSync(world.logPath, "utf8"), concurrent);
+    assert.equal(existsSync(world.piRoot), true);
+    assert.equal(existsSync(path.join(world.bin, "codex-swap")), false);
+
+    const retried = runInstaller(world);
+    assert.equal(retried.status, 0, `${retried.stdout}\n${retried.stderr}`);
+    assert.equal(existsSync(world.piRoot), false);
+  },
+);
+
+test(
+  "a retired append after the cleanup snapshot forces an exact retry",
+  { skip: !POSIX },
+  async (context) => {
+    const world = makeWorld();
+    context.after(() => rmSync(world.root, { recursive: true, force: true }));
+    const refused = await runInstallerAtHook(world, "log-snapshot", () => {
+      appendFileSync(world.logPath, world.retiredLog, { encoding: "utf8" });
+    });
+
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /post-snapshot log record; rerun the installer/);
+    assert.equal(existsSync(world.piRoot), true);
+    assert.equal(existsSync(path.join(world.bin, "codex-swap")), false);
+    assert.equal(existsSync(path.join(world.state, "install-receipt")), false);
+    assert.equal(readFileSync(world.logPath, "utf8").endsWith(world.retiredLog), true);
+
+    const retried = runInstaller(world);
+    assert.equal(retried.status, 0, `${retried.stdout}\n${retried.stderr}`);
+    assert.equal(readFileSync(world.logPath, "utf8").includes(world.retiredLog), false);
+  },
+);
+
+test(
+  "profile retirement re-proves an atomically claimed directory before deletion",
+  { skip: !POSIX },
+  async (context) => {
+    const world = makeWorld();
+    context.after(() => rmSync(world.root, { recursive: true, force: true }));
+    const profilesRoot = path.join(world.piRoot, "profiles");
+    const [profileName] = readdirSync(profilesRoot);
+    assert.ok(profileName);
+    const profile = path.join(profilesRoot, profileName);
+    const heldProfile = path.join(world.root, "held-owned-profile");
+    const foreignMarker = path.join(profile, "foreign.txt");
+
+    const refused = await runInstallerAtHook(world, "profile-claim", () => {
+      renameSync(profile, heldProfile);
+      mkdirSync(profile);
+      writeFileSync(foreignMarker, "must survive\n", { mode: 0o600 });
+    });
+
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /does not prove|changed before removal/);
+    assert.equal(readFileSync(foreignMarker, "utf8"), "must survive\n");
+    assert.equal(existsSync(heldProfile), true);
+    assert.deepEqual(readdirSync(profilesRoot), [profileName]);
+    assert.equal(existsSync(path.join(world.bin, "codex-swap")), false);
+    assert.equal(existsSync(path.join(world.state, "install-receipt")), false);
+
+    rmSync(profile, { recursive: true, force: false });
+    renameSync(heldProfile, profile);
+    const retried = runInstaller(world);
+    assert.equal(retried.status, 0, `${retried.stdout}\n${retried.stderr}`);
+    assert.equal(existsSync(world.piRoot), false);
   },
 );
 

@@ -2,15 +2,23 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   closeSync,
+  constants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
   renameSync,
   rmSync,
+  rmdirSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
@@ -32,6 +40,7 @@ const RETIRED_COMMAND = "pi";
 const RETIRED_LEASE_PURPOSE = "pi-session";
 const RETIRED_LEASE_BYTES = Buffer.from(RETIRED_LEASE_PURPOSE, "utf8");
 const RETRY = "let AgentUsage and codex-swap database readers finish, then rerun scripts/install.sh --install";
+const FIRED_TEST_HOOKS = new Set();
 
 class CleanupRefusedError extends Error {}
 
@@ -66,26 +75,212 @@ function requireRegularFile(target, label) {
   return stat;
 }
 
+function nodeIdentity(stat) {
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+function sameNodeIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function fileSnapshotIdentity(stat) {
+  return {
+    ...nodeIdentity(stat),
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+  };
+}
+
+function sameFileSnapshot(left, right) {
+  return (
+    sameNodeIdentity(left, right) &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs
+  );
+}
+
+function openNoFollow(target, flags, mode) {
+  const noFollow = constants.O_NOFOLLOW ?? 0;
+  return openSync(target, flags | noFollow, mode);
+}
+
+function readStableRegularFile(target, label) {
+  let descriptor;
+  try {
+    descriptor = openNoFollow(target, constants.O_RDONLY);
+    const before = fstatSync(descriptor);
+    if (!before.isFile()) {
+      throw new CleanupRefusedError(
+        `refusing ${label} at ${target}: expected a regular file`,
+      );
+    }
+    const contents = readFileSync(descriptor);
+    const after = fstatSync(descriptor);
+    if (
+      !sameFileSnapshot(
+        fileSnapshotIdentity(before),
+        fileSnapshotIdentity(after),
+      ) ||
+      contents.length !== after.size
+    ) {
+      throw new CleanupRefusedError(
+        `refusing ${label} at ${target}: file changed during inspection`,
+      );
+    }
+    return {
+      contents,
+      identity: fileSnapshotIdentity(after),
+    };
+  } catch (error) {
+    if (error instanceof CleanupRefusedError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CleanupRefusedError(
+      `refusing ${label} at ${target}: ${message}`,
+    );
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
 function profileDirName(accountKey) {
   const sanitized = accountKey.replace(/[^A-Za-z0-9._-]+/g, "-");
   const digest = createHash("sha256").update(accountKey).digest("hex").slice(0, 8);
   return `${sanitized}-${digest}`;
 }
 
-function validateOwnedTree(target, owningDevice) {
-  for (const entry of readdirSync(target)) {
-    const child = path.join(target, entry);
-    const stat = lstatSync(child);
-    if (stat.isSymbolicLink()) continue;
-    if (stat.isDirectory()) {
-      if (stat.dev !== owningDevice) {
+function inspectOwnedTree(target, owningDevice) {
+  const manifest = [];
+
+  function visit(directory, relativeDirectory) {
+    const before = lstatSync(directory);
+    if (
+      before.isSymbolicLink() ||
+      !before.isDirectory() ||
+      before.dev !== owningDevice
+    ) {
+      throw new CleanupRefusedError(
+        `refusing Pi profile cleanup: ${directory} is not an owned local directory`,
+      );
+    }
+    const entries = readdirSync(directory).sort();
+    for (const entry of entries) {
+      const child = path.join(directory, entry);
+      const relative = path.join(relativeDirectory, entry);
+      const stat = lstatSync(child);
+      const identity = [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs];
+      if (stat.isSymbolicLink()) {
+        const destination = readlinkSync(child);
+        const after = lstatSync(child);
+        if (!sameFileSnapshot(fileSnapshotIdentity(stat), fileSnapshotIdentity(after))) {
+          throw new CleanupRefusedError(
+            `refusing Pi profile cleanup: ${child} changed during inspection`,
+          );
+        }
+        manifest.push(["link", relative, ...identity, destination]);
+      } else if (stat.isDirectory()) {
+        if (stat.dev !== owningDevice) {
+          throw new CleanupRefusedError(
+            `refusing Pi profile cleanup: ${child} is a mounted directory`,
+          );
+        }
+        manifest.push(["directory", relative, ...identity]);
+        visit(child, relative);
+      } else if (stat.isFile()) {
+        const snapshot = readStableRegularFile(child, "Pi profile file");
+        if (!sameFileSnapshot(fileSnapshotIdentity(stat), snapshot.identity)) {
+          throw new CleanupRefusedError(
+            `refusing Pi profile cleanup: ${child} changed during inspection`,
+          );
+        }
+        manifest.push([
+          "file",
+          relative,
+          ...identity,
+          createHash("sha256").update(snapshot.contents).digest("hex"),
+        ]);
+      } else {
         throw new CleanupRefusedError(
-          `refusing Pi profile cleanup: ${child} is a mounted directory`,
+          `refusing Pi profile cleanup: ${child} is not a regular owned entry`,
         );
       }
-      validateOwnedTree(child, owningDevice);
+    }
+    const after = lstatSync(directory);
+    const afterEntries = readdirSync(directory).sort();
+    if (
+      !sameNodeIdentity(nodeIdentity(before), nodeIdentity(after)) ||
+      entries.length !== afterEntries.length ||
+      entries.some((entry, index) => entry !== afterEntries[index])
+    ) {
+      throw new CleanupRefusedError(
+        `refusing Pi profile cleanup: ${directory} changed during inspection`,
+      );
     }
   }
+
+  visit(target, "");
+  return createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
+}
+
+function inspectOwnedProfile(profileDir, entry, owningDevice) {
+  const profileStat = requireRealDirectory(profileDir, "Pi account profile");
+  if (profileStat === null || profileStat.dev !== owningDevice) {
+    throw new CleanupRefusedError(
+      `refusing Pi profile cleanup: ${profileDir} is not an owned local profile`,
+    );
+  }
+  const metadataPath = path.join(profileDir, "profile.json");
+  const metadataStat = requireRegularFile(metadataPath, "Pi profile metadata");
+  if (metadataStat === null || metadataStat.dev !== owningDevice) {
+    throw new CleanupRefusedError(
+      `refusing Pi profile cleanup: ${metadataPath} does not prove codex-swap ownership`,
+    );
+  }
+  const metadataBefore = readStableRegularFile(metadataPath, "Pi profile metadata");
+  if (!sameNodeIdentity(nodeIdentity(metadataStat), metadataBefore.identity)) {
+    throw new CleanupRefusedError(
+      `refusing Pi profile cleanup: ${metadataPath} changed during inspection`,
+    );
+  }
+  let metadata;
+  try {
+    metadata = JSON.parse(metadataBefore.contents.toString("utf8"));
+  } catch {
+    throw new CleanupRefusedError(
+      `refusing Pi profile cleanup: ${metadataPath} is not valid metadata`,
+    );
+  }
+  if (
+    typeof metadata !== "object" ||
+    metadata === null ||
+    metadata.schemaVersion !== PROFILE_SCHEMA_VERSION ||
+    typeof metadata.accountKey !== "string" ||
+    metadata.accountKey.length === 0 ||
+    typeof metadata.verifiedAccountId !== "string" ||
+    metadata.verifiedAccountId.length === 0 ||
+    typeof metadata.linkedAtMs !== "number" ||
+    !Number.isFinite(metadata.linkedAtMs) ||
+    entry !== profileDirName(metadata.accountKey)
+  ) {
+    throw new CleanupRefusedError(
+      `refusing Pi profile cleanup: ${metadataPath} does not prove codex-swap ownership`,
+    );
+  }
+  const fingerprint = inspectOwnedTree(profileDir, owningDevice);
+  const metadataAfter = readStableRegularFile(metadataPath, "Pi profile metadata");
+  if (
+    !sameFileSnapshot(metadataBefore.identity, metadataAfter.identity) ||
+    !metadataBefore.contents.equals(metadataAfter.contents)
+  ) {
+    throw new CleanupRefusedError(
+      `refusing Pi profile cleanup: ${metadataPath} changed during inspection`,
+    );
+  }
+  return {
+    name: entry,
+    path: profileDir,
+    identity: nodeIdentity(profileStat),
+    fingerprint,
+  };
 }
 
 function inspectProfiles(root) {
@@ -94,7 +289,17 @@ function inspectProfiles(root) {
     throw new CleanupRefusedError(`refusing unexpected Pi profile root: ${piRoot}`);
   }
   const piStat = requireRealDirectory(piRoot, "Pi profile root");
-  if (piStat === null) return { root: piRoot, present: false, profiles: 0 };
+  if (piStat === null) {
+    return {
+      root: piRoot,
+      present: false,
+      profiles: 0,
+      rootIdentity: null,
+      profilesRoot: path.join(piRoot, "profiles"),
+      profilesIdentity: null,
+      entries: [],
+    };
+  }
 
   const rootEntries = readdirSync(piRoot);
   if (rootEntries.some((entry) => entry !== "profiles")) {
@@ -105,7 +310,15 @@ function inspectProfiles(root) {
   const profilesRoot = path.join(piRoot, "profiles");
   const profilesStat = requireRealDirectory(profilesRoot, "Pi profiles directory");
   if (profilesStat === null) {
-    return { root: piRoot, present: true, profiles: 0 };
+    return {
+      root: piRoot,
+      present: true,
+      profiles: 0,
+      rootIdentity: nodeIdentity(piStat),
+      profilesRoot,
+      profilesIdentity: null,
+      entries: [],
+    };
   }
   if (profilesStat.dev !== piStat.dev) {
     throw new CleanupRefusedError(
@@ -113,54 +326,30 @@ function inspectProfiles(root) {
     );
   }
 
-  let profiles = 0;
-  for (const entry of readdirSync(profilesRoot)) {
+  const entries = [];
+  for (const entry of readdirSync(profilesRoot).sort()) {
     if (/^\.staging-\d+$/.test(entry)) {
       throw new CleanupRefusedError(
         `refusing Pi profile cleanup: ${entry} is an unverified interrupted link; inspect it and retry`,
       );
     }
-    const profileDir = path.join(profilesRoot, entry);
-    const profileStat = requireRealDirectory(profileDir, "Pi account profile");
-    if (profileStat === null || profileStat.dev !== piStat.dev) {
-      throw new CleanupRefusedError(
-        `refusing Pi profile cleanup: ${profileDir} is not an owned local profile`,
-      );
-    }
-    const metadataPath = path.join(profileDir, "profile.json");
-    requireRegularFile(metadataPath, "Pi profile metadata");
-    let metadata;
-    try {
-      metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-    } catch {
-      throw new CleanupRefusedError(
-        `refusing Pi profile cleanup: ${metadataPath} is not valid metadata`,
-      );
-    }
-    if (
-      typeof metadata !== "object" ||
-      metadata === null ||
-      metadata.schemaVersion !== PROFILE_SCHEMA_VERSION ||
-      typeof metadata.accountKey !== "string" ||
-      metadata.accountKey.length === 0 ||
-      typeof metadata.verifiedAccountId !== "string" ||
-      metadata.verifiedAccountId.length === 0 ||
-      typeof metadata.linkedAtMs !== "number" ||
-      !Number.isFinite(metadata.linkedAtMs) ||
-      entry !== profileDirName(metadata.accountKey)
-    ) {
-      throw new CleanupRefusedError(
-        `refusing Pi profile cleanup: ${metadataPath} does not prove codex-swap ownership`,
-      );
-    }
-    validateOwnedTree(profileDir, piStat.dev);
-    profiles += 1;
+    entries.push(
+      inspectOwnedProfile(path.join(profilesRoot, entry), entry, piStat.dev),
+    );
   }
-  return { root: piRoot, present: true, profiles };
+  return {
+    root: piRoot,
+    present: true,
+    profiles: entries.length,
+    rootIdentity: nodeIdentity(piStat),
+    profilesRoot,
+    profilesIdentity: nodeIdentity(profilesStat),
+    entries,
+  };
 }
 
 function splitAndFilterLog(contents) {
-  const kept = [];
+  const redactions = [];
   let removed = 0;
   let start = 0;
   for (let cursor = 0; cursor <= contents.length; cursor += 1) {
@@ -183,52 +372,101 @@ function splitAndFilterLog(contents) {
         // the exact top-level command this cleanup is authorized to remove.
       }
     }
-    if (retire) removed += 1;
-    else if (chunkEnd > start) kept.push(contents.subarray(start, chunkEnd));
+    if (retire) {
+      removed += 1;
+      // Keep the newline and the file's byte offsets stable. Replacing only
+      // the retired record body lets append-only writers continue on this
+      // inode without any suffix ever crossing a truncate or rename.
+      if (cursor > start) redactions.push({ start, end: cursor });
+    }
     start = chunkEnd;
   }
-  return { contents: Buffer.concat(kept), removed };
+  return { redactions, removed };
 }
 
-function fileIdentity(stat, contents) {
-  return {
-    dev: stat.dev,
-    ino: stat.ino,
-    size: stat.size,
-    mtimeMs: stat.mtimeMs,
-    digest: createHash("sha256").update(contents).digest("hex"),
-  };
-}
-
-function sameIdentity(left, right) {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.digest === right.digest
-  );
-}
-
-function inspectLog(root) {
-  const directory = logsDir(root);
-  const directoryStat = requireRealDirectory(directory, "codex-swap log directory");
-  const file = logFilePath(root);
-  const stat = requireRegularFile(file, "codex-swap JSONL log");
+function inspectLogGeneration(file, directoryStat, label) {
+  const stat = requireRegularFile(file, label);
   if (stat === null) return { file, present: false, removed: 0 };
   if (directoryStat === null || stat.dev !== directoryStat.dev) {
     throw new CleanupRefusedError(
       `refusing Pi log cleanup: ${file} is not owned by its log directory`,
     );
   }
-  const original = readFileSync(file);
-  const filtered = splitAndFilterLog(original);
+  const snapshot = readStableRegularFile(file, "codex-swap JSONL log");
+  const filtered = splitAndFilterLog(snapshot.contents);
   return {
     file,
     present: true,
     removed: filtered.removed,
-    filtered: filtered.contents,
-    identity: fileIdentity(stat, original),
+    original: snapshot.contents,
+    identity: snapshot.identity,
+  };
+}
+
+function logSurfaceSnapshot(directory, current) {
+  const directoryStat = requireRealDirectory(directory, "codex-swap log directory");
+  const entries = directoryStat === null ? [] : readdirSync(directory).sort();
+  const generationIdentity = (file, label) => {
+    const stat = requireRegularFile(file, label);
+    return stat === null ? null : fileSnapshotIdentity(stat);
+  };
+  return {
+    directoryIdentity:
+      directoryStat === null ? null : nodeIdentity(directoryStat),
+    entries,
+    currentIdentity: generationIdentity(current, "codex-swap JSONL log"),
+    rotatedIdentity: generationIdentity(
+      `${current}.1`,
+      "codex-swap rotated JSONL log",
+    ),
+  };
+}
+
+function sameOptionalFileSnapshot(left, right) {
+  if (left === null || right === null) return left === right;
+  return sameFileSnapshot(left, right);
+}
+
+function sameLogSurface(left, right) {
+  const sameDirectory =
+    left.directoryIdentity === null || right.directoryIdentity === null
+      ? left.directoryIdentity === right.directoryIdentity
+      : sameNodeIdentity(left.directoryIdentity, right.directoryIdentity);
+  return (
+    sameDirectory &&
+    left.entries.length === right.entries.length &&
+    left.entries.every((entry, index) => entry === right.entries[index]) &&
+    sameOptionalFileSnapshot(left.currentIdentity, right.currentIdentity) &&
+    sameOptionalFileSnapshot(left.rotatedIdentity, right.rotatedIdentity)
+  );
+}
+
+function inspectLogs(root, testHook) {
+  const directory = logsDir(root);
+  const directoryStat = requireRealDirectory(directory, "codex-swap log directory");
+  const current = logFilePath(root);
+  const before = logSurfaceSnapshot(directory, current);
+  const currentGeneration = inspectLogGeneration(
+    current,
+    directoryStat,
+    "codex-swap JSONL log",
+  );
+  if (testHook !== undefined) pauseForTestHook(root, testHook);
+  const rotatedGeneration = inspectLogGeneration(
+    `${current}.1`,
+    directoryStat,
+    "codex-swap rotated JSONL log",
+  );
+  const after = logSurfaceSnapshot(directory, current);
+  if (!sameLogSurface(before, after)) {
+    throw new CleanupRefusedError(
+      "codex-swap logs changed during inspection; rerun scripts/install.sh --install",
+    );
+  }
+  const generations = [rotatedGeneration, currentGeneration];
+  return {
+    generations,
+    removed: generations.reduce((total, generation) => total + generation.removed, 0),
   };
 }
 
@@ -456,61 +694,254 @@ function cleanDatabase(plan) {
   if (hadRetiredRows || current.rawRemnant) compactDatabase(current.file);
 }
 
-function rewriteLog(plan) {
-  if (!plan.present || plan.removed === 0) return;
-  const currentStat = requireRegularFile(plan.file, "codex-swap JSONL log");
-  const currentContents = readFileSync(plan.file);
+function pauseForTestHook(root, point) {
   if (
-    currentStat === null ||
-    !sameIdentity(plan.identity, fileIdentity(currentStat, currentContents))
+    process.env.CODEX_SWAP_RETIRE_TEST_HOOK !== point ||
+    FIRED_TEST_HOOKS.has(point)
   ) {
-    throw new CleanupRefusedError(
-      `codex-swap log changed during cleanup; rerun scripts/install.sh --install`,
-    );
+    return;
   }
+  FIRED_TEST_HOOKS.add(point);
+  const base = path.join(root, `.retire-pi-test-${point}`);
+  const ready = `${base}.ready`;
+  const release = `${base}.release`;
+  writeFileSync(ready, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 30_000;
+  try {
+    while (!existsSync(release)) {
+      if (Date.now() >= deadline) {
+        throw new CleanupRefusedError(
+          `test hook ${point} timed out waiting for release`,
+        );
+      }
+      Atomics.wait(sleeper, 0, 0, 10);
+    }
+  } finally {
+    for (const marker of [ready, release]) {
+      try {
+        unlinkSync(marker);
+      } catch {
+        // The release marker may not exist when a timed-out test is aborted.
+      }
+    }
+  }
+}
 
-  const temporary = `${plan.file}.retire-${process.pid}-${randomBytes(6).toString("hex")}`;
+function writeSpaces(descriptor, start, end) {
+  const chunk = Buffer.alloc(Math.min(64 * 1024, end - start), 0x20);
+  let position = start;
+  while (position < end) {
+    const length = Math.min(chunk.length, end - position);
+    const written = writeSync(descriptor, chunk, 0, length, position);
+    if (written <= 0) {
+      throw new CleanupRefusedError(
+        "codex-swap log redaction made no forward progress",
+      );
+    }
+    position += written;
+  }
+}
+
+function rewriteLogGeneration(plan, root) {
+  if (!plan.present || plan.removed === 0) return;
   let descriptor;
   try {
-    descriptor = openSync(temporary, "wx", 0o600);
-    writeFileSync(descriptor, plan.filtered);
-    fsyncSync(descriptor);
-    closeSync(descriptor);
-    descriptor = undefined;
-    if (process.platform !== "win32") chmodSync(temporary, 0o600);
-
-    const beforeRenameStat = requireRegularFile(plan.file, "codex-swap JSONL log");
-    const beforeRenameContents = readFileSync(plan.file);
+    const directoryStat = requireRealDirectory(
+      path.dirname(plan.file),
+      "codex-swap log directory",
+    );
+    descriptor = openNoFollow(plan.file, constants.O_RDWR);
+    const currentStat = fstatSync(descriptor);
     if (
-      beforeRenameStat === null ||
-      !sameIdentity(
-        plan.identity,
-        fileIdentity(beforeRenameStat, beforeRenameContents),
-      )
+      directoryStat === null ||
+      !currentStat.isFile() ||
+      currentStat.dev !== directoryStat.dev ||
+      !sameNodeIdentity(plan.identity, nodeIdentity(currentStat))
     ) {
       throw new CleanupRefusedError(
         `codex-swap log changed during cleanup; rerun scripts/install.sh --install`,
       );
     }
-    renameSync(temporary, plan.file);
-    let directory;
-    try {
-      directory = openSync(path.dirname(plan.file), "r");
-      fsyncSync(directory);
-    } catch {
-      // The file itself is durable; directory fsync is unavailable on some
-      // platforms and filesystems.
-    } finally {
-      if (directory !== undefined) closeSync(directory);
+    const currentContents = readFileSync(descriptor);
+    if (
+      currentContents.length < plan.original.length ||
+      !currentContents.subarray(0, plan.original.length).equals(plan.original)
+    ) {
+      throw new CleanupRefusedError(
+        `codex-swap log changed during cleanup; rerun scripts/install.sh --install`,
+      );
     }
+    const current = splitAndFilterLog(currentContents);
+    pauseForTestHook(root, "log-snapshot");
+    for (const redaction of current.redactions) {
+      writeSpaces(descriptor, redaction.start, redaction.end);
+    }
+    fsyncSync(descriptor);
+    if (process.platform !== "win32") fchmodSync(descriptor, 0o600);
+  } catch (error) {
+    if (error instanceof CleanupRefusedError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CleanupRefusedError(`codex-swap log cleanup failed: ${message}`);
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function rewriteLogs(plan, root) {
+  for (const generation of plan.generations) {
+    rewriteLogGeneration(generation, root);
+  }
+}
+
+function sameProfileEvidence(left, right) {
+  return (
+    left.name === right.name &&
+    sameNodeIdentity(left.identity, right.identity) &&
+    left.fingerprint === right.fingerprint
+  );
+}
+
+function sameProfileSnapshot(left, right) {
+  if (left.present !== right.present) return false;
+  if (!left.present) return true;
+  if (
+    !sameNodeIdentity(left.rootIdentity, right.rootIdentity) ||
+    (left.profilesIdentity === null) !== (right.profilesIdentity === null)
+  ) {
+    return false;
+  }
+  if (
+    left.profilesIdentity !== null &&
+    !sameNodeIdentity(left.profilesIdentity, right.profilesIdentity)
+  ) {
+    return false;
+  }
+  return (
+    left.entries.length === right.entries.length &&
+    left.entries.every((entry, index) =>
+      sameProfileEvidence(entry, right.entries[index]),
+    )
+  );
+}
+
+function makeProfileQuarantine(profilesRoot) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const candidate = path.join(
+      profilesRoot,
+      `.retire-${process.pid}-${randomBytes(8).toString("hex")}`,
+    );
     try {
-      unlinkSync(temporary);
-    } catch {
-      // Renamed successfully or never created.
+      mkdirSync(candidate, { mode: 0o700 });
+      return {
+        path: candidate,
+        identity: nodeIdentity(lstatSync(candidate)),
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
     }
   }
+  throw new CleanupRefusedError(
+    "could not reserve a private Pi profile quarantine directory",
+  );
+}
+
+function restoreClaim(claimed, original, quarantine) {
+  try {
+    if (statIfPresent(original) === null && statIfPresent(claimed) !== null) {
+      renameSync(claimed, original);
+    }
+  } finally {
+    try {
+      rmdirSync(quarantine);
+    } catch {
+      // A claimed foreign or concurrently changed entry must survive for
+      // inspection rather than being recursively removed.
+    }
+  }
+}
+
+function removeEmptyOwnedDirectory(target, identity, label) {
+  const stat = requireRealDirectory(target, label);
+  if (stat === null) return;
+  if (!sameNodeIdentity(identity, nodeIdentity(stat))) {
+    throw new CleanupRefusedError(
+      `refusing Pi profile cleanup: ${target} was replaced during cleanup`,
+    );
+  }
+  if (readdirSync(target).length !== 0) {
+    throw new CleanupRefusedError(
+      `refusing Pi profile cleanup: ${target} gained an unexpected entry`,
+    );
+  }
+  try {
+    rmdirSync(target);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CleanupRefusedError(
+      `refusing Pi profile cleanup: ${target} changed before removal: ${message}`,
+    );
+  }
+}
+
+function removeOwnedProfiles(initial) {
+  const current = inspectProfiles(path.dirname(initial.root));
+  if (!initial.present) {
+    if (current.present) {
+      throw new CleanupRefusedError(
+        `refusing Pi profile cleanup: ${current.root} appeared during cleanup`,
+      );
+    }
+    return;
+  }
+  if (!current.present) return;
+  if (!sameProfileSnapshot(initial, current)) {
+    throw new CleanupRefusedError(
+      `refusing Pi profile cleanup: ${current.root} changed during cleanup`,
+    );
+  }
+
+  for (const profile of current.entries) {
+    pauseForTestHook(path.dirname(current.root), "profile-claim");
+    const quarantine = makeProfileQuarantine(current.profilesRoot);
+    const claimed = path.join(quarantine.path, profile.name);
+    renameSync(profile.path, claimed);
+    let claimedEvidence;
+    try {
+      claimedEvidence = inspectOwnedProfile(
+        claimed,
+        profile.name,
+        current.rootIdentity.dev,
+      );
+      if (!sameProfileEvidence(profile, claimedEvidence)) {
+        throw new CleanupRefusedError(
+          `refusing Pi profile cleanup: ${profile.path} changed before removal`,
+        );
+      }
+    } catch (error) {
+      restoreClaim(claimed, profile.path, quarantine.path);
+      throw error;
+    }
+    rmSync(claimed, { recursive: true, force: false });
+    removeEmptyOwnedDirectory(
+      quarantine.path,
+      quarantine.identity,
+      "Pi profile quarantine",
+    );
+  }
+
+  if (current.profilesIdentity !== null) {
+    removeEmptyOwnedDirectory(
+      current.profilesRoot,
+      current.profilesIdentity,
+      "Pi profiles directory",
+    );
+  }
+  removeEmptyOwnedDirectory(
+    current.root,
+    current.rootIdentity,
+    "Pi profile root",
+  );
 }
 
 function inspectAll(root) {
@@ -522,7 +953,7 @@ function inspectAll(root) {
   return {
     root: resolved,
     profiles: inspectProfiles(resolved),
-    log: inspectLog(resolved),
+    log: inspectLogs(resolved),
     database: inspectDatabase(resolved),
   };
 }
@@ -546,15 +977,14 @@ function main() {
   const plan = inspectAll(dataRoot(process.env));
   if (!dryRun) {
     cleanDatabase(plan.database);
-    rewriteLog(plan.log);
-    if (plan.profiles.present) {
-      rmSync(plan.profiles.root, {
-        recursive: true,
-        force: false,
-        maxRetries: 3,
-        retryDelay: 50,
-      });
+    rewriteLogs(plan.log, plan.root);
+    const verifiedLogs = inspectLogs(plan.root, "log-verification");
+    if (verifiedLogs.removed !== 0) {
+      throw new CleanupRefusedError(
+        "Pi retirement verification found a post-snapshot log record; rerun the installer",
+      );
     }
+    removeOwnedProfiles(plan.profiles);
     const verified = inspectAll(plan.root);
     if (
       verified.profiles.present ||
