@@ -196,7 +196,7 @@ test("snapshot --json carries the versioned shape with fail-safe eligibility", a
   };
   assert.equal(envelope.command, "snapshot");
   assert.equal(envelope.data.schemaVersion, 1);
-  assert.equal(envelope.data.dependency.version, "2.8.7");
+  assert.equal(envelope.data.dependency.version, "2.10.0");
   assert.equal(envelope.data.canonicalCodexHome, world.env["CODEX_HOME"]);
   assert.equal(envelope.data.recommendation, null);
   for (const account of envelope.data.accounts) {
