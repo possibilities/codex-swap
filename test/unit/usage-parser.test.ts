@@ -56,6 +56,7 @@ test("parses the official full-shape response", () => {
 
   assert.equal(measurement.planType, "enterprise_cbp_automation");
   assert.equal(measurement.limitReached, false);
+  assert.equal(measurement.resetCreditsAvailable, 3);
   assert.equal(measurement.windows.length, 3);
 
   const [primary, secondary, review] = measurement.windows;
@@ -122,6 +123,31 @@ test("credits balance parses from number, string, and unlimited flag", () => {
   const unlimited = parse({ credits: { unlimited: true, balance: null } });
   assert.equal(unlimited.creditsUnlimited, true);
   assert.equal(unlimited.creditsLeft, undefined);
+});
+
+test("reset credits preserve zero, omit missing counts, and reject malformed counts", () => {
+  assert.equal(
+    parse({ rate_limit_reset_credits: { available_count: 0 } })
+      .resetCreditsAvailable,
+    0,
+  );
+  assert.equal(parse({}).resetCreditsAvailable, undefined);
+  assert.equal(
+    parse({ rate_limit_reset_credits: {} }).resetCreditsAvailable,
+    undefined,
+  );
+  assert.equal(
+    parse({ rate_limit_reset_credits: { available_count: null } })
+      .resetCreditsAvailable,
+    undefined,
+  );
+
+  for (const available_count of [-1, 1.5, "3"]) {
+    assert.throws(
+      () => parse({ rate_limit_reset_credits: { available_count } }),
+      UsageParseError,
+    );
+  }
 });
 
 test("missing reset fields leave resetsAt undefined; reset_after_seconds substitutes", () => {

@@ -114,6 +114,11 @@ documented ones. `snapshot --json` is the primary integration boundary.
 }
 ```
 
+`UsageMeasurement`: `{schemaVersion, probeKind, planType?, creditsLeft?,
+creditsUnlimited?, resetCreditsAvailable?, limitReached?, windows[],
+fetchedAt}`. `resetCreditsAvailable` is a non-negative integer when reported
+and is display metadata only; it never affects headroom or selection.
+
 `UsageMeasurement.windows[]`: `{kind: primary|secondary|code_review|other,
 label: "5h"|"daily"|"weekly"|…, windowSeconds?, usedPercent (raw),
 remainingPercent (clamped), resetsAt?, resetAfterSeconds?, limitName?,

@@ -41,6 +41,10 @@ const wireCredits = z.looseObject({
   unlimited: z.boolean().nullish(),
 });
 
+const wireResetCredits = z.looseObject({
+  available_count: z.number().int().nonnegative().nullish(),
+});
+
 const wireAdditionalLimit = z.looseObject({
   limit_name: z.string().nullish(),
   metered_feature: z.string().nullish(),
@@ -53,6 +57,7 @@ const wireUsageResponse = z.looseObject({
   code_review_rate_limit: wireRateLimit.nullish(),
   additional_rate_limits: z.array(wireAdditionalLimit).nullish(),
   credits: wireCredits.nullish(),
+  rate_limit_reset_credits: wireResetCredits.nullish(),
 });
 
 export class UsageParseError extends Error {}
@@ -213,6 +218,10 @@ export function parseUsageResponse(
   }
   if (wire.credits?.unlimited != null) {
     measurement.creditsUnlimited = wire.credits.unlimited;
+  }
+  const resetCreditsAvailable = wire.rate_limit_reset_credits?.available_count;
+  if (resetCreditsAvailable != null) {
+    measurement.resetCreditsAvailable = resetCreditsAvailable;
   }
   if (general?.limit_reached != null) {
     measurement.limitReached = general.limit_reached;

@@ -2,7 +2,7 @@
  * Normalized usage measurement per handoff §15.3, extended with fields the
  * official Codex OpenAPI schema provides that the handoff draft predates:
  * reset_after_seconds (clock-skew-free countdown), credits unlimited flag,
- * and the rate_limit limit_reached boolean.
+ * the rate_limit limit_reached boolean, and reset-credit availability.
  *
  * Persisted verbatim as usage_state.last_good_json — keep JSON-serializable
  * and secret-free.
@@ -41,6 +41,8 @@ export interface UsageMeasurement {
   planType?: string;
   creditsLeft?: number;
   creditsUnlimited?: boolean;
+  /** Provider-issued one-shot reset credits; display metadata only. */
+  resetCreditsAvailable?: number;
   /** True when the provider says the general rate limit is currently reached. */
   limitReached?: boolean;
   windows: UsageWindow[];

@@ -918,6 +918,7 @@ rate_limit.primary_window
 rate_limit.secondary_window
 code_review_rate_limit.primary_window
 credits.balance
+rate_limit_reset_credits.available_count
 ```
 
 Each window may contain:
@@ -959,10 +960,14 @@ interface UsageMeasurement {
   probeKind: "direct-wham" | "direct-codex" | "header-probe";
   planType?: string;
   creditsLeft?: number;
+  resetCreditsAvailable?: number;
   windows: UsageWindow[];
   fetchedAt: string;
 }
 ```
+
+`resetCreditsAvailable` is display metadata only. It does not contribute to
+binding headroom, eligibility, selection, polling, or invocation leases.
 
 Validation:
 
