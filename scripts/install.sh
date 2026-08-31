@@ -48,6 +48,20 @@ NODE_BIN="$(command -v node || true)"
 NODE_MAJOR="$("$NODE_BIN" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
 [ "$NODE_MAJOR" -ge 24 ] || die "node >= 24 is required (found $NODE_MAJOR)"
 
+# ── retired Pi state ────────────────────────────────────────────────────────
+# The removed integration owned one exact subtree under codex-swap's data
+# root, lease/event rows with one exact purpose, and top-level command="pi"
+# JSONL records. Preflight proves those boundaries before any mutation. A
+# failed cleanup aborts installation rather than removing the command that
+# formerly exposed unlink/prune while credential-bearing profiles remain.
+retire_pi_state() {
+    if (( DRY )); then
+        "${NODE_BIN}" "${ROOT}/scripts/retire-pi-state.mjs" --dry-run
+    else
+        "${NODE_BIN}" "${ROOT}/scripts/retire-pi-state.mjs"
+    fi
+}
+
 # ── carrying the integration branch forward ─────────────────────────────────
 # Upstream keeps moving; a fork pinned to its own branch quietly stops
 # receiving bugfixes and drifts until the patch it carries no longer applies.
@@ -292,6 +306,8 @@ install_command() {
         note "codex-swap -> ${ROOT}"
     fi
 }
+
+retire_pi_state || die "Pi retirement cleanup did not complete; nothing was installed"
 
 status=0
 install_ndy_fork || status=1

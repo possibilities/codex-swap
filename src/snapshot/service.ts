@@ -83,11 +83,6 @@ export class SnapshotService {
   private readonly broker: CredentialBroker;
   readonly leases: InvocationLeaseStore;
 
-  /** Derived non-secret identity claim for one account (broker-mediated). */
-  async identityClaimId(accountKey: string): Promise<string | null> {
-    return this.broker.identityClaimId(accountKey);
-  }
-
   constructor(options: {
     db: Database;
     reader: NdyStoreReader;
@@ -348,12 +343,6 @@ export class SnapshotService {
     /** Restrict normal eligibility/scoring to this account (balanced pinning). */
     requiredAccountKey?: string;
     /**
-     * Harness capability gate: accounts outside `keys` are excluded with
-     * `reason` (e.g. pi_profile_missing — quota alone cannot make an
-     * account launchable by a harness it was never linked to).
-     */
-    restrict?: { keys: ReadonlySet<string>; reason: AccountExclusionReason };
-    /**
      * Active family rate-limit records for the launch's model family,
      * excluding their accounts with `family_rate_limited`. Never applied to
      * a forced account — explicit targeting is gated by its own caller.
@@ -363,22 +352,7 @@ export class SnapshotService {
     return this.db.immediate(() => {
       this.leases.expireStaleLocked();
       const rows = this.catalog.listAll();
-      let views = this.assembleViewsLocked(rows);
-      if (options.restrict !== undefined) {
-        const { keys, reason } = options.restrict;
-        views = views.map((view) =>
-          keys.has(view.accountKey)
-            ? view
-            : {
-                ...view,
-                selection: {
-                  ...view.selection,
-                  eligible: false,
-                  exclusions: [...view.selection.exclusions, reason],
-                },
-              },
-        );
-      }
+      const views = this.assembleViewsLocked(rows);
 
       let result: SelectionResult;
       if (options.forcedAccountKey !== undefined) {

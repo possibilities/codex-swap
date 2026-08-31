@@ -51,55 +51,6 @@ codex-swap doctor
 codex-swap config set selection.defaultMaxConcurrent 2
 ```
 
-## Pi on the same account pool
-
-The pi coding agent can ride the same ChatGPT accounts (ADR 0005). Link each
-account once, then launch pi exactly like Codex, under the same invocation
-leases. Linking runs pi's `/login` inside a dedicated per-account profile and
-verifies the resulting identity against the pool before storing anything.
-
-```sh
-codex-swap pi link                  # interactive; repeat per account
-codex-swap pi status
-codex-swap pi prune                 # drop profiles no account claims
-codex-swap pi run --strategy best -- -p "hello"
-codex-swap pi run --account you@example.com -- --model gpt-5.2-codex
-codex-swap pi run --claim "$lease" -- …
-```
-
-Pi sessions stay in the canonical pi session store (`~/.pi/agent/sessions`), so
-any account resumes any session, and shared pi configuration (extensions,
-skills, settings) is symlinked into every profile. `--strategy` only considers
-accounts with a linked, identity-verified profile (`pi_profile_missing`
-otherwise). Quota comes from the same store as Codex launches, because quota is
-per account, not per OAuth grant.
-
-If an account's key changes underneath a link — ndy supplying recordIds re-keys
-`account:<id>` to `record:<id>` — its profile is *adopted* onto the new key
-automatically, proven by the profile's own token claim rather than a fresh
-login. `pi status` and every launch path do it, and report the key it came from.
-
-A `--claim` lease is *advisory*: it comes from a balancer that selects on quota
-and cannot see pi linkage, so a claim on an account pi has no grant for is
-released and the run re-selects among linked accounts. A `--account` pin is
-binding and fails instead — a human naming an account said something the
-balancer did not. `pi prune` removes profiles no account claims, adopting first
-so nothing recoverable is deleted; it confirms one by one and refuses
-non-interactively without `--yes`, because only a fresh `pi link` can undo it.
-
-`~/.pi/agent/auth.json` is **expected to be empty**: `auth.json` is the one
-per-profile real file, so each account's grant lives in its own profile and the
-canonical one is never written. A bare `pi` reporting no authenticated provider
-is therefore normal and says nothing about the pool — it means the launch
-skipped the wrapper, most often because `AGENTLAUNCH_LAUNCH=1` was already set
-in that shell (agentlaunch's recursion sentinel makes the shim exec the real
-binary). Check a profile instead of the canonical dir:
-
-```sh
-codex-swap pi status
-PI_CODING_AGENT_DIR="$profile" pi auth check --provider openai-codex --json
-```
-
 ## Balancing harness integration
 
 Selection is explainable and claimable. A read-only `select` never mutates

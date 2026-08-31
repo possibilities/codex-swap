@@ -18,8 +18,7 @@ export type AccountExclusionReason =
   | "usage_unknown"
   | "quota_exhausted"
   | "family_rate_limited"
-  | "max_concurrent_reached"
-  | "pi_profile_missing";
+  | "max_concurrent_reached";
 
 export type UsageStatus =
   | "ok"

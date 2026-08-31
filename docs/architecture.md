@@ -42,12 +42,8 @@ CodexRunner / HistoryService
 - `src/selection/` — exclusions, scoring, strategies, invocation leases.
 - `src/snapshot/` — the coherent read boundary; assembles one versioned
   snapshot from a single pass.
-- `src/runner/` — spawns children under invocation leases (`leased.ts` is
-  the shared choreography): the ndy forced-account wrapper for Codex, pi
-  pinned via profile environment for pi.
-- `src/pi/` — pi profiles (ADR 0005): per-account agent dirs with verified
-  identities; `profile-auth.ts` is the only reader of a profile's
-  auth.json and exports derived facts, never tokens.
+- `src/runner/` — spawns the ndy forced-account wrapper for Codex under
+  invocation leases (`leased.ts` is the shared choreography).
 - `src/history/` — provider-independent session listing and direct-ID resume.
 - `src/storage/` — SQLite open/migrate/permissions; all times epoch ms UTC.
 

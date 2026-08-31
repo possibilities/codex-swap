@@ -2369,9 +2369,9 @@ If implementation preserves that separation, the project can track upstream auth
 
 Retired 2026-08-12. codex-swap no longer starts, registers, attaches, or
 proxies dedicated Codex app-server sidecars. The product boundary is back to
-the original one-shot data and invocation layer: `run`, `resume`, and
-`pi run` choose an account, take an invocation lease, and launch the native
-Codex or Pi process directly.
+the original one-shot data and invocation layer: `run` and `resume` choose an
+account, take an invocation lease, and launch the native Codex process
+directly.
 
 This does not forbid a foreground App Server invocation: `run` may forward
 `-c ... app-server --listen ...` exactly like any other official Codex argv.
@@ -2390,7 +2390,7 @@ The removed surface included:
 
 Existing databases migrate by expiring any live `purpose: "app-server"`
 leases and dropping the retired registry/capability tables. The ordinary
-invocation lease table stays unchanged for Codex and Pi launches.
+invocation lease table stays unchanged for Codex launches.
 
 The ndy fork wiring that existed only to support app-server helper fixes is
 therefore retired as well: `scripts/install.sh` sets `NDY_FORK_ACTIVE=0`, so

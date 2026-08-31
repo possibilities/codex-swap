@@ -57,8 +57,7 @@ CodexRunner / HistoryService
 - Raw tokens, auth headers, authorization URLs, and callback codes never
   appear in the SQLite database, settings, logs, events, JSON output, or
   exception messages. Only `src/accounts/credential-broker.ts` may see ndy
-  token fields, and only `src/pi/profile-auth.ts` may read a pi profile's
-  auth.json — it exports derived identity facts, never credentials.
+  token fields.
 - Accounts are identified by stable `account_key`
   (`record:<recordId>` | `account:<providerAccountId>` | `legacy:<hash>`),
   never by array index or email alone.

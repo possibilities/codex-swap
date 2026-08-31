@@ -16,7 +16,6 @@ Commands:
   usage               Store-governed usage view
   select              Explain or atomically claim an account selection
   run                 Select/pin an account and launch Codex
-  pi                  Link accounts to pi profiles and launch pi balanced
   history             Provider-independent session list
   resume              Resume a session by ID under any usable account
   leases              Inspect invocation leases
@@ -37,7 +36,6 @@ import { runAuthCommand } from "./commands/auth.ts";
 import { runConfigCommand } from "./commands/config.ts";
 import { runDoctorCommand } from "./commands/doctor.ts";
 import { runHistoryCommand } from "./commands/history.ts";
-import { runPiCommand } from "./commands/pi.ts";
 import { runRunCommand } from "./commands/run.ts";
 import { runLeasesCommand } from "./commands/leases.ts";
 import { runResumeCommand } from "./commands/resume.ts";
@@ -54,7 +52,6 @@ const commands = new Map<string, CommandHandler>([
   ["usage", runUsageCommand],
   ["select", runSelectCommand],
   ["run", runRunCommand],
-  ["pi", runPiCommand],
   ["resume", runResumeCommand],
   ["leases", runLeasesCommand],
   ["history", runHistoryCommand],
