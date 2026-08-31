@@ -399,13 +399,13 @@ Use:
 - built-in `fetch` with explicit timeout and redirect policy;
 - `spawn` with argument arrays, `shell: false`, and explicit stdio modes.
 
-Pin ndy exactly at the initially reviewed version:
+Pin ndy exactly at the verified release version (currently 2.10.0):
 
 ```json
-"codex-multi-auth": "2.8.4"
+"codex-multi-auth": "2.10.0"
 ```
 
-Do not use `^2.8.4`. Dependency upgrades require the compatibility checklist later in this document.
+Do not use a range. Dependency upgrades require the compatibility checklist later in this document.
 
 If built-in SQLite proves incompatible with the minimum supported Node release, use `better-sqlite3` behind the same repository interface. Do not redesign storage around JSON merely to avoid one dependency: transactionality, cross-process claims, and invocation leases are core behavior.
 

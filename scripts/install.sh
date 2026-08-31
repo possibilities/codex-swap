@@ -2,10 +2,11 @@
 # codex-swap installer. Owns the `codex-swap` command and, only while the
 # switch below is on, a managed codex-multi-auth fork that command binds to.
 #
-# The switch is off: 2.8.7 released both patches the fork was carrying —
-# the prompt-bearing-TUI canonical home (#673/#674) and the pinned-503 blocker
-# wording (#675/#676) — so the exact npm pin ships them and the checkout is no
-# longer consulted. Turn it back on only for a fresh unreleased patch.
+# The switch is off: 2.10.0 released the pinned-503 fixes carried by the fork
+# (#682/#683), on top of the earlier prompt-bearing-TUI and blocker wording
+# releases (#673/#674, #675/#676). The exact npm pin now ships the full fix and
+# the checkout is no longer consulted. Turn it back on only for a fresh
+# unreleased patch.
 #
 # Safe to re-run.
 set -uo pipefail
