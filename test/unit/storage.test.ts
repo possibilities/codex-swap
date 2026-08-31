@@ -123,7 +123,7 @@ test("immediate transaction commits and rolls back", () => {
   db.close();
 });
 
-test("migration 5 removes only retired Pi lease audit state", (context) => {
+test("migration 5 remains an applied no-op", (context) => {
   const root = tempRoot();
   context.after(() => rmSync(root, { recursive: true, force: true }));
   const dbPath = path.join(root, "from-v4.db");
@@ -164,20 +164,6 @@ test("migration 5 removes only retired Pi lease audit state", (context) => {
     '{"summary":"preserve exactly"}',
     0,
   );
-  insertLease.run(
-    "retired-lease",
-    22,
-    "retired-nonce",
-    "pi-session",
-    "/retired",
-    20,
-    21,
-    22,
-    23,
-    "released",
-    '{"summary":"retired"}',
-    0,
-  );
   const insertEvent = old.prepare(
     `INSERT INTO events (occurred_at_ms, event_type, account_key, payload_json)
      VALUES (?, ?, 'record:a', ?)`,
@@ -187,14 +173,6 @@ test("migration 5 removes only retired Pi lease audit state", (context) => {
     "invocation_lease_acquired",
     '{"leaseId":"codex-lease","purpose":"codex-session","keep":"exact"}',
   );
-  insertEvent.run(
-    31,
-    "invocation_lease_acquired",
-    '{"leaseId":"retired-lease","purpose":"pi-session"}',
-  );
-  insertEvent.run(32, "invocation_started", '{"leaseId":"retired-lease"}');
-  insertEvent.run(33, "invocation_finished", '{"leaseId":"retired-lease"}');
-
   const codexLeaseBefore = old
     .prepare("SELECT * FROM invocation_leases WHERE lease_id = 'codex-lease'")
     .get();
@@ -205,20 +183,6 @@ test("migration 5 removes only retired Pi lease audit state", (context) => {
 
   const upgraded = Database.open(dbPath, () => 9_000);
   assert.equal(appliedSchemaVersion(upgraded.handle), 5);
-  assert.equal(
-    upgraded.handle
-      .prepare("SELECT COUNT(*) AS n FROM invocation_leases WHERE purpose = 'pi-session'")
-      .get()?.["n"],
-    0,
-  );
-  assert.equal(
-    upgraded.handle
-      .prepare(
-        "SELECT COUNT(*) AS n FROM events WHERE json_extract(payload_json, '$.leaseId') = 'retired-lease'",
-      )
-      .get()?.["n"],
-    0,
-  );
   assert.deepEqual(
     upgraded.handle
       .prepare("SELECT * FROM invocation_leases WHERE lease_id = 'codex-lease'")

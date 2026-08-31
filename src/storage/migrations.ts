@@ -11,45 +11,6 @@ export interface Migration {
   sql: string;
 }
 
-/**
- * One alternate-harness retirement transaction shared by the additive
- * migration and installer cleanup. The retired purpose is assembled inside
- * SQLite so its name is absent from runtime build/package artifacts. The
- * installer keeps the human-readable ownership proof outside `dist`.
- */
-export const RETIRE_ALTERNATE_HARNESS_DATABASE_SQL = `
-DELETE FROM events
- WHERE event_id IN (
-    SELECT event_id
-      FROM events
-     WHERE CASE
-               WHEN json_valid(payload_json)
-               THEN json_extract(payload_json, '$.purpose')
-           END = char(112, 105, 45, 115, 101, 115, 115, 105, 111, 110)
-        OR CASE
-               WHEN json_valid(payload_json)
-               THEN json_extract(payload_json, '$.leaseId')
-           END IN (
-               SELECT lease_id
-                 FROM invocation_leases
-                WHERE purpose = char(112, 105, 45, 115, 101, 115, 115, 105, 111, 110)
-               UNION
-               SELECT CASE
-                          WHEN json_valid(payload_json)
-                          THEN json_extract(payload_json, '$.leaseId')
-                      END
-                 FROM events
-                WHERE CASE
-                          WHEN json_valid(payload_json)
-                          THEN json_extract(payload_json, '$.purpose')
-                      END = char(112, 105, 45, 115, 101, 115, 115, 105, 111, 110)
-           )
- );
-
-DELETE FROM invocation_leases
- WHERE purpose = char(112, 105, 45, 115, 101, 115, 115, 105, 111, 110);
-`;
-
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -220,12 +181,10 @@ DROP TABLE IF EXISTS ndy_capability;
   {
     version: 5,
     sql: `
--- The alternate harness was retired from codex-swap. Remove its leases and
--- every lifecycle event tied to those lease IDs while leaving Codex and
--- harness audit rows byte-for-byte logically unchanged. The installer follows
--- this transaction with VACUUM and a truncating WAL checkpoint so deleted
--- payload bytes do not remain in database storage.
-${RETIRE_ALTERNATE_HARNESS_DATABASE_SQL}`,
+-- Version 5 was a one-time data migration. Existing databases may already
+-- record it as applied, so the version remains reserved as an inert step.
+SELECT 1;
+`,
   },
 ];
 

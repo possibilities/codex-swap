@@ -21,7 +21,7 @@ test("build cleanup removes stale deleted outputs before packaging", (context) =
   const fixture = mkdtempSync(path.join(os.tmpdir(), "codex-swap-clean-"));
   context.after(() => rmSync(fixture, { recursive: true, force: true }));
   const scripts = path.join(fixture, "scripts");
-  const stale = path.join(fixture, "dist", "pi", "retired.js");
+  const stale = path.join(fixture, "dist", "legacy", "retired.js");
   const adjacent = path.join(fixture, "keep.txt");
   mkdirSync(path.dirname(stale), { recursive: true });
   mkdirSync(scripts);
