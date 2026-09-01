@@ -95,6 +95,28 @@ test("a hostile CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT in the parent env never 
   assert.ok(!("CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT" in record.env));
 });
 
+test("a hostile CODEX_CI in the parent env never reaches the child", async () => {
+  const { adapter, recordDir } = makeAdapter({
+    CODEX_CI: "1",
+  });
+  await adapter.status();
+  const [record] = readInvocations(recordDir);
+  assert.ok(record);
+  assert.ok(!("CODEX_CI" in record.env));
+});
+
+test("a manager env with both CODEX_CI and CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT set never leaks either to the child", async () => {
+  const { adapter, recordDir } = makeAdapter({
+    CODEX_CI: "1",
+    CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT: "1",
+  });
+  await adapter.status();
+  const [record] = readInvocations(recordDir);
+  assert.ok(record);
+  assert.ok(!("CODEX_CI" in record.env));
+  assert.ok(!("CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT" in record.env));
+});
+
 test("login modes map to exact ndy argv", async () => {
   const { adapter, recordDir } = makeAdapter();
   await adapter.login("device");

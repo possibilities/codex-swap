@@ -13,7 +13,8 @@ export function recordInvocation(bin, argv) {
       key.startsWith("CODEX_AUTH_") ||
       key === "CODEX_SKIP_EMAIL_HYDRATE" ||
       key === "AGENTLAUNCH_LAUNCH" ||
-      key === "CODEX_HOME"
+      key === "CODEX_HOME" ||
+      key === "CODEX_CI"
     ) {
       envPicks[key] = value;
     }

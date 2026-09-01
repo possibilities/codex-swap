@@ -32,6 +32,13 @@ import path from "node:path";
  * off its own stdio, which our launch always attaches to a real terminal),
  * so a stale override from the parent env would silently break interactive
  * sessions with "stdout is not a terminal".
+ *
+ * CODEX_CI must never be inherited either: the pinned wrapper's
+ * shouldCaptureForwardedCodexOutput() (scripts/codex.js) treats an
+ * inherited CODEX_CI="1" as an independent force-true path — ahead of its
+ * own isTTY auto-detect fallback — so a CI-flavored manager/orchestrator
+ * environment (this one included) would force piped stdio on every ndy
+ * child even when CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT is unset.
  */
 export const NDY_CONTAINMENT_ENV: Readonly<Record<string, string>> = {
   CODEX_MULTI_AUTH_APP_BIND: "0",
@@ -95,5 +102,6 @@ export function withNdyContainment(
   delete env["CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY"];
   delete env["CODEX_MULTI_AUTH_BYPASS"];
   delete env["CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT"];
+  delete env["CODEX_CI"];
   return env;
 }

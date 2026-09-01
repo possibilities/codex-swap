@@ -17,7 +17,14 @@ import { fileURLToPath } from "node:url";
  * CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT=1 forces it to pipe even under a
  * real terminal (see src/ndy/environment.ts). This proves the full
  * `run --claim` path keeps the ndy child attached to a real PTY and that a
- * hostile CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT never reaches it.
+ * hostile CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT never reaches it. It also
+ * proves a hostile inherited CODEX_CI=1 (e.g. from a CI-flavored manager or
+ * orchestrator environment this process itself runs under) never reaches
+ * the ndy child either: the pinned wrapper's own
+ * shouldCaptureForwardedCodexOutput() (scripts/codex.js) treats CODEX_CI=1
+ * as an independent force-true path ahead of its isTTY auto-detect, so a
+ * stale CODEX_CI would force piped stdio just as surely as a stale
+ * CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT would.
  */
 const MAIN = fileURLToPath(new URL("../../src/cli/main.ts", import.meta.url));
 const FIXTURE_DIR = fileURLToPath(new URL("../fixtures/fake-ndy", import.meta.url));
@@ -91,6 +98,12 @@ function makeWorld(serverUrl: string): { env: NodeJS.ProcessEnv; recordDir: stri
       // codex-swap invocation sharing the same shell env) leaves this set.
       // It must never reach the ndy child under an interactive launch.
       CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT: "1",
+      // Hostile inheritance: a CI-flavored manager/orchestrator environment
+      // (this test process itself may run under one) leaves this set. The
+      // pinned ndy wrapper treats it as an independent force-true path for
+      // piping the real Codex CLI's stdio, so it must never reach the child
+      // either, even under a real interactive PTY launch.
+      CODEX_CI: "1",
     },
   };
 }
@@ -195,6 +208,10 @@ test(
       assert.ok(
         !("CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT" in invocation.env),
         "a hostile capture-output override must never reach the ndy child",
+      );
+      assert.ok(
+        !("CODEX_CI" in invocation.env),
+        "a hostile inherited CODEX_CI must never reach the ndy child",
       );
     } finally {
       await server.close();

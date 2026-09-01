@@ -162,3 +162,29 @@ test("strips an inherited CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT from the paren
     "a stale override must not force the wrapper to pipe the real Codex CLI's stdio",
   );
 });
+
+test("strips an inherited CODEX_CI from the parent env", () => {
+  const env = withNdyContainment({
+    PATH: "/usr/bin",
+    CODEX_CI: "1",
+  });
+  assert.ok(
+    !("CODEX_CI" in env),
+    "an inherited CODEX_CI=1 must not force the wrapper's shouldCaptureForwardedCodexOutput() true path",
+  );
+});
+
+test("a manager env with both CODEX_CI and CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT set loses both while unrelated keys survive", () => {
+  const env = withNdyContainment({
+    PATH: "/usr/bin",
+    HOME: "/tmp/h",
+    CODEX_CI: "1",
+    CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT: "1",
+    MY_UNRELATED_VAR: "kept",
+  });
+  assert.ok(!("CODEX_CI" in env));
+  assert.ok(!("CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT" in env));
+  assert.equal(env["PATH"], "/usr/bin");
+  assert.equal(env["HOME"], "/tmp/h");
+  assert.equal(env["MY_UNRELATED_VAR"], "kept");
+});
