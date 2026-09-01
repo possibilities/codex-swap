@@ -173,8 +173,12 @@ of:
   negative remaining headroom in at least one of them.
 
 Lane identity for a window comes from `limitName`, falling back to
-`meteredFeature` only when `limitName` is absent, matched case-insensitively
-against the requested lane; headroom is the conservative minimum
+`meteredFeature` only when `limitName` is absent; the lowercased value maps
+to the canonical `codex-spark` lane whenever it contains `spark` (matching
+production wire shapes like `limitName: "gpt-5.3-codex-spark"` or
+`meteredFeature: "codex_spark"`), the same substring convention `--model`
+validation already uses, and is otherwise left unmapped so a non-Spark
+identity never matches. Headroom is the conservative minimum
 `remainingPercent` across every matching window.
 
 Invalid combinations (missing `--account`/`--claim`/`--model`, an unknown

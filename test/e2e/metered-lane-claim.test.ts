@@ -276,6 +276,18 @@ const BASE_FIXTURES: AccountFixture[] = [
     refreshToken: "rt-spark-mismatch",
   },
   {
+    recordId: "spark_production_shape",
+    accountId: "acc_spark_production_shape",
+    email: "spark-production-shape@x.com",
+    refreshToken: "rt-spark-production-shape",
+  },
+  {
+    recordId: "spark_production_underscore",
+    accountId: "acc_spark_production_underscore",
+    email: "spark-production-underscore@x.com",
+    refreshToken: "rt-spark-production-underscore",
+  },
+  {
     recordId: "spark_disabled",
     accountId: "acc_spark_disabled",
     email: "spark-disabled@x.com",
@@ -343,8 +355,24 @@ function basePlans(): Map<string, AccountUsagePlan> {
     lane: [{ usedPercent: 25, meteredFeature: "CODEX-SPARK" }],
   });
   plans.set("acc_spark_limitname_mismatch", {
+    // "gpt-5-primary" genuinely does not contain "spark" (unlike
+    // "not-spark", which would match under the substring convention
+    // isSparkModel already uses).
     mainUsedPercent: 10,
-    lane: [{ usedPercent: 15, limitName: "not-spark", meteredFeature: "codex-spark" }],
+    lane: [{ usedPercent: 15, limitName: "gpt-5-primary", meteredFeature: "codex-spark" }],
+  });
+  // Production-shaped wire values (see test/unit/usage-parser.test.ts):
+  // limitName is model-qualified, not the bare literal "codex-spark".
+  plans.set("acc_spark_production_shape", {
+    mainUsedPercent: 100,
+    limitReached: true,
+    lane: [{ usedPercent: 30, limitName: "gpt-5.3-codex-spark", meteredFeature: "codex_spark" }],
+  });
+  // Production-shaped underscore meteredFeature with no limitName at all.
+  plans.set("acc_spark_production_underscore", {
+    mainUsedPercent: 100,
+    limitReached: true,
+    lane: [{ usedPercent: 40, meteredFeature: "codex_spark" }],
   });
   plans.set("acc_spark_disabled", {
     mainUsedPercent: 10,
@@ -461,6 +489,46 @@ test("limitName identifies the lane and wins over a mismatched meteredFeature", 
     const { code, envelope } = await claim(world.env, "record:spark_limitname");
     assert.equal(code, 0, JSON.stringify(envelope));
     assert.equal(envelope.data?.selection.headroomPercent, 80);
+  } finally {
+    await server.close();
+  }
+});
+
+test("production-shaped model-qualified limitName claims via positive Spark headroom", async () => {
+  // Regression: real wire limitName is "gpt-5.3-codex-spark", not the bare
+  // literal "codex-spark". Before the fix, laneIdentity's exact-equality
+  // comparison would spuriously refuse this with spark_lane_unavailable
+  // even though real Spark data is present.
+  const plans = basePlans();
+  const server = await startServer(plans);
+  try {
+    const world = makeWorld(server.url, BASE_FIXTURES);
+    await runCli(["usage", "refresh", "--json"], world.env);
+    const { code, envelope } = await claim(world.env, "record:spark_production_shape");
+    assert.equal(code, 0, JSON.stringify(envelope));
+    assert.equal(envelope.data?.selection.kind, "selected");
+    assert.equal(envelope.data?.selection.lane, "codex-spark");
+    assert.equal(envelope.data?.selection.headroomPercent, 70);
+    assert.equal(envelope.data?.lease?.status, "reserved");
+  } finally {
+    await server.close();
+  }
+});
+
+test("production-shaped underscore meteredFeature claims via positive Spark headroom", async () => {
+  // Regression: real wire meteredFeature is "codex_spark" (underscore),
+  // consulted only when limitName is absent.
+  const plans = basePlans();
+  const server = await startServer(plans);
+  try {
+    const world = makeWorld(server.url, BASE_FIXTURES);
+    await runCli(["usage", "refresh", "--json"], world.env);
+    const { code, envelope } = await claim(world.env, "record:spark_production_underscore");
+    assert.equal(code, 0, JSON.stringify(envelope));
+    assert.equal(envelope.data?.selection.kind, "selected");
+    assert.equal(envelope.data?.selection.lane, "codex-spark");
+    assert.equal(envelope.data?.selection.headroomPercent, 60);
+    assert.equal(envelope.data?.lease?.status, "reserved");
   } finally {
     await server.close();
   }

@@ -21,13 +21,23 @@ export function isSparkModel(model: string): boolean {
  * A window's lane identity: `limitName` verbatim from the wire, falling
  * back to `meteredFeature` only when `limitName` is absent. Compared
  * case-insensitively against the requested lane.
+ *
+ * Production wire values are not the bare literal `codex-spark` — they are
+ * model-qualified (`gpt-5.3-codex-spark`) or underscored
+ * (`codex_spark`). Normalization here follows the same convention already
+ * frozen by `isSparkModel`: a lowercased identity that *contains* "spark"
+ * maps to the canonical `codex-spark` lane; anything else is returned
+ * lowercased and unmapped, so a non-Spark lane still compares/refuses
+ * correctly.
  */
 function laneIdentity(window: UsageWindow): string | null {
   const raw =
     window.limitName !== undefined && window.limitName.length > 0
       ? window.limitName
       : window.meteredFeature;
-  return raw !== undefined && raw.length > 0 ? raw.toLowerCase() : null;
+  if (raw === undefined || raw.length === 0) return null;
+  const lowered = raw.toLowerCase();
+  return lowered.includes("spark") ? SPARK_METERED_LANE : lowered;
 }
 
 export type MeteredLaneHeadroom =

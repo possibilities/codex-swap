@@ -83,9 +83,12 @@ test("limitName identifies the lane and wins over a conflicting meteredFeature",
 });
 
 test("a limitName that does not match the lane refuses even when meteredFeature does", () => {
+  // "gpt-5-primary" genuinely does not contain "spark" (unlike a fixture
+  // such as "not-spark", which would — under the same substring convention
+  // isSparkModel already uses — actually match the Spark lane).
   const result = meteredLaneHeadroom(
     measurement([
-      otherWindow({ usedPercent: 30, limitName: "not-spark", meteredFeature: "codex-spark" }),
+      otherWindow({ usedPercent: 30, limitName: "gpt-5-primary", meteredFeature: "codex_spark" }),
     ]),
     SPARK_METERED_LANE,
   );
@@ -109,6 +112,37 @@ test("headroom is the conservative minimum across every window in the lane", () 
     SPARK_METERED_LANE,
   );
   assert.deepEqual(result, { kind: "available", headroomPercent: 20 });
+});
+
+test("a production-shaped model-qualified limitName normalizes to the codex-spark lane", () => {
+  // Real wire data: limitName is "gpt-5.3-codex-spark", not the bare
+  // literal "codex-spark" (see test/unit/usage-parser.test.ts).
+  const result = meteredLaneHeadroom(
+    measurement([otherWindow({ usedPercent: 30, limitName: "gpt-5.3-codex-spark" })]),
+    SPARK_METERED_LANE,
+  );
+  assert.deepEqual(result, { kind: "available", headroomPercent: 70 });
+});
+
+test("a production-shaped underscore meteredFeature normalizes to the codex-spark lane when limitName is absent", () => {
+  // Real wire data: meteredFeature is "codex_spark" (underscore variant).
+  // "codex_spark".toLowerCase().includes("spark") is true, so it still
+  // resolves.
+  const result = meteredLaneHeadroom(
+    measurement([otherWindow({ usedPercent: 40, meteredFeature: "codex_spark" })]),
+    SPARK_METERED_LANE,
+  );
+  assert.deepEqual(result, { kind: "available", headroomPercent: 60 });
+});
+
+test("a non-Spark limitName is never rescued by a Spark-looking meteredFeature, even production-shaped", () => {
+  const result = meteredLaneHeadroom(
+    measurement([
+      otherWindow({ usedPercent: 30, limitName: "gpt-5-primary", meteredFeature: "codex_spark" }),
+    ]),
+    SPARK_METERED_LANE,
+  );
+  assert.deepEqual(result, { kind: "unavailable" });
 });
 
 test("full usage in any lane window is exhausted (zero headroom), not unavailable", () => {
