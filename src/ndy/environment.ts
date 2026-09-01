@@ -80,9 +80,12 @@ export function resolveCodexHome(
 export function withNdyContainment(
   base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...base,
     ...NDY_CONTAINMENT_ENV,
     CODEX_MULTI_AUTH_DIR: resolveMultiAuthDir(base),
   };
+  delete env["CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY"];
+  delete env["CODEX_MULTI_AUTH_BYPASS"];
+  return env;
 }

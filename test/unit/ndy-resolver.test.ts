@@ -111,3 +111,43 @@ test("containment never disables the runtime rotation proxy", () => {
   const env = withNdyContainment({});
   assert.equal(env["CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY"], undefined);
 });
+
+test("strips an inherited CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY from the parent env", () => {
+  const env = withNdyContainment({
+    PATH: "/usr/bin",
+    CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY: "0",
+  });
+  assert.ok(!("CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY" in env));
+});
+
+test("strips an inherited CODEX_MULTI_AUTH_BYPASS from the parent env", () => {
+  const env = withNdyContainment({
+    PATH: "/usr/bin",
+    CODEX_MULTI_AUTH_BYPASS: "1",
+  });
+  assert.ok(!("CODEX_MULTI_AUTH_BYPASS" in env));
+});
+
+test("hostile parent env cannot smuggle either key back in while unrelated keys survive", () => {
+  const env = withNdyContainment({
+    PATH: "/usr/bin",
+    HOME: "/tmp/h",
+    CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY: "0",
+    CODEX_MULTI_AUTH_BYPASS: "1",
+    MY_UNRELATED_VAR: "kept",
+  });
+  assert.ok(!("CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY" in env));
+  assert.ok(!("CODEX_MULTI_AUTH_BYPASS" in env));
+  assert.equal(env["PATH"], "/usr/bin");
+  assert.equal(env["HOME"], "/tmp/h");
+  assert.equal(env["MY_UNRELATED_VAR"], "kept");
+});
+
+test("explicit CODEX_MULTI_AUTH_DIR still takes precedence under a hostile parent env", () => {
+  const env = withNdyContainment({
+    CODEX_MULTI_AUTH_DIR: "/explicit/store",
+    CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY: "0",
+    CODEX_MULTI_AUTH_BYPASS: "1",
+  });
+  assert.equal(env["CODEX_MULTI_AUTH_DIR"], path.resolve("/explicit/store"));
+});
