@@ -82,6 +82,17 @@ test("every ndy child receives the containment environment and pinned store dir"
   assert.equal(record.env["CODEX_MULTI_AUTH_DIR"], multiAuthDir);
   assert.ok(!("CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY" in record.env));
   assert.ok(!("CODEX_MULTI_AUTH_BYPASS" in record.env));
+  assert.ok(!("CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT" in record.env));
+});
+
+test("a hostile CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT in the parent env never reaches the child", async () => {
+  const { adapter, recordDir } = makeAdapter({
+    CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT: "1",
+  });
+  await adapter.status();
+  const [record] = readInvocations(recordDir);
+  assert.ok(record);
+  assert.ok(!("CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT" in record.env));
 });
 
 test("login modes map to exact ndy argv", async () => {

@@ -25,6 +25,13 @@ import path from "node:path";
  * CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY is deliberately NOT set: forced
  * account invocation requires the runtime proxy. CODEX_MULTI_AUTH_BYPASS
  * must never be set either — it disables `--account` entirely.
+ *
+ * CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT must never be inherited either:
+ * when set to "1" the wrapper spawns the real Codex CLI with stdout/stderr
+ * piped instead of inherited (its own auto-detect fallback otherwise keys
+ * off its own stdio, which our launch always attaches to a real terminal),
+ * so a stale override from the parent env would silently break interactive
+ * sessions with "stdout is not a terminal".
  */
 export const NDY_CONTAINMENT_ENV: Readonly<Record<string, string>> = {
   CODEX_MULTI_AUTH_APP_BIND: "0",
@@ -87,5 +94,6 @@ export function withNdyContainment(
   };
   delete env["CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY"];
   delete env["CODEX_MULTI_AUTH_BYPASS"];
+  delete env["CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT"];
   return env;
 }

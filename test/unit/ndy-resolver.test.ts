@@ -151,3 +151,14 @@ test("explicit CODEX_MULTI_AUTH_DIR still takes precedence under a hostile paren
   });
   assert.equal(env["CODEX_MULTI_AUTH_DIR"], path.resolve("/explicit/store"));
 });
+
+test("strips an inherited CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT from the parent env", () => {
+  const env = withNdyContainment({
+    PATH: "/usr/bin",
+    CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT: "1",
+  });
+  assert.ok(
+    !("CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT" in env),
+    "a stale override must not force the wrapper to pipe the real Codex CLI's stdio",
+  );
+});
