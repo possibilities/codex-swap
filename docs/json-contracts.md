@@ -134,6 +134,55 @@ envelope `NO_ELIGIBLE_ACCOUNT` (exit 3) whose `details` carry
 `{reason: all_exhausted|all_unknown|all_disabled|all_quarantined|no_accounts,
 nextReadyAt, exclusions: [{accountKey, exclusions[]}]}`.
 
+### select --metered-lane codex-spark (standalone Spark-lane claim)
+
+```text
+codex-swap select --account <account-key> --claim \
+  --metered-lane codex-spark --model <spark-model> --json
+```
+
+A narrow claim primitive for the separately metered Spark lane, distinct
+from balanced/pinned selection above: it targets exactly one account,
+requires `--claim` and a `--model` whose normalized name contains `spark`,
+and is incompatible with `--strategy` and `--allow-unknown`. It revalidates
+every ordinary eligibility guard except `quota_exhausted`, which it waives
+only after finding independent positive headroom in the account's own
+Spark-lane windows — general quota exhaustion elsewhere never blocks it, and
+nothing else is bypassed. It never falls back to another account and never
+updates `selection_state` (no effect on ordinary balanced/rotation state).
+
+Success data: `{selection: {kind: "selected", accountKey,
+providerAccountId, lane: "codex-spark", headroomPercent, summary}, lease:
+{leaseId, ownerNonce, accountKey, status, expiresAt}}`. The lease is an
+ordinary invocation lease with `purpose: "codex-spark-claim"`; it is
+reserved, heartbeated, and consumed via `run --claim <lease-id> -- ...`
+exactly like any other lease.
+
+A refusal is `NO_ELIGIBLE_ACCOUNT` (exit 3) whose `details` carry
+`{reason, exclusions: [{accountKey, exclusions[]}]}` where `reason` is one
+of:
+
+- `account_not_found` — the account key is not in the catalog;
+- `eligibility_excluded` — an ordinary, non-waived exclusion applies
+  (`exclusions` lists it, same reasons as `selection.exclusions` elsewhere);
+- `spark_lane_unavailable` — no window in the account's current, decision-
+  grade measurement identifies as the requested lane (missing or unknown
+  Spark data, including a stale/untrusted measurement, which surfaces as
+  `usage_unknown` under `eligibility_excluded` instead);
+- `spark_lane_exhausted` — the lane has matching windows but zero or
+  negative remaining headroom in at least one of them.
+
+Lane identity for a window comes from `limitName`, falling back to
+`meteredFeature` only when `limitName` is absent, matched case-insensitively
+against the requested lane; headroom is the conservative minimum
+`remainingPercent` across every matching window.
+
+Invalid combinations (missing `--account`/`--claim`/`--model`, an unknown
+`--metered-lane` value, a `--model` without `spark` in its normalized name,
+`--model` without `--metered-lane`, or `--strategy`/`--allow-unknown`
+alongside `--metered-lane`) fail with `INVALID_ARGUMENTS` (exit 2) before
+any reconcile or claim attempt.
+
 ### accounts / usage / leases / history / doctor
 
 - `accounts`: `{count, accounts: [{accountKey, providerAccountId, email,

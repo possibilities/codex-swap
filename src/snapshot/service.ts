@@ -21,6 +21,10 @@ import {
 import { dataRoot, databasePath } from "../storage/paths.ts";
 import { InvocationLeaseStore, type InvocationLease } from "../selection/leases.ts";
 import {
+  meteredLaneHeadroom,
+  type MeteredLaneClaimResult,
+} from "../selection/metered-lane.ts";
+import {
   selectAccount,
   type FamilyBlock,
   type SelectionResult,
@@ -422,6 +426,100 @@ export class SnapshotService {
         )
         .run(result.accountKey, this.clock());
       return { result, lease };
+    });
+  }
+
+  /**
+   * Standalone claim primitive for a separately metered lane (e.g. Codex
+   * Spark): revalidates every ordinary eligibility guard for the one exact
+   * account except `quota_exhausted`, which this lane exists to waive, then
+   * requires independent positive headroom in the lane's own windows before
+   * reserving a lease. Never falls back to another account, never updates
+   * `selection_state` — this is invocation-only, exactly like a forced pin,
+   * but honest about capacity instead of bypassing every gate.
+   */
+  selectAndClaimMeteredLane(options: {
+    accountKey: string;
+    lane: string;
+    purpose: string;
+    cwd?: string | undefined;
+    familyBlocks?: ReadonlyMap<string, FamilyBlock> | null;
+  }): { result: MeteredLaneClaimResult; lease: InvocationLease | null } {
+    return this.db.immediate(() => {
+      this.leases.expireStaleLocked();
+      const rows = this.catalog.listAll();
+      const views = this.assembleViewsLocked(rows);
+      const view = views.find((v) => v.accountKey === options.accountKey);
+      if (view === undefined) {
+        return {
+          result: { kind: "none", reason: "account_not_found", exclusions: [] },
+          lease: null,
+        };
+      }
+
+      // Single-candidate selection reuses the ordinary exclusion computation
+      // (max concurrency, family blocks, cooldown, etc.) so nothing here can
+      // drift from automatic selection's eligibility gate.
+      const gate = selectAccount({
+        accounts: [view],
+        strategy: "best",
+        settings: this.settings.selection,
+        allowUnknown: false,
+        lastSelectedAccountKey: null,
+        sequence: 0,
+        familyBlocks: options.familyBlocks ?? null,
+      });
+      const exclusions =
+        gate.exclusions.find((e) => e.accountKey === options.accountKey)
+          ?.exclusions ?? [];
+      const nonWaivable = exclusions.filter((e) => e !== "quota_exhausted");
+      if (nonWaivable.length > 0) {
+        return {
+          result: { kind: "none", reason: "eligibility_excluded", exclusions: gate.exclusions },
+          lease: null,
+        };
+      }
+
+      const measurement = view.usage.measurement;
+      const headroom =
+        measurement === null
+          ? { kind: "unavailable" as const }
+          : meteredLaneHeadroom(measurement, options.lane);
+      if (headroom.kind === "unavailable") {
+        return {
+          result: { kind: "none", reason: "spark_lane_unavailable", exclusions: [] },
+          lease: null,
+        };
+      }
+      if (headroom.headroomPercent <= 0) {
+        return {
+          result: { kind: "none", reason: "spark_lane_exhausted", exclusions: [] },
+          lease: null,
+        };
+      }
+
+      const lease = this.leases.reserveLocked({
+        accountKey: view.accountKey,
+        purpose: options.purpose,
+        cwd: options.cwd,
+        selectorReason: {
+          kind: "metered-lane",
+          lane: options.lane,
+          headroomPercent: headroom.headroomPercent,
+        },
+      });
+
+      return {
+        result: {
+          kind: "selected",
+          accountKey: view.accountKey,
+          providerAccountId: view.providerAccountId,
+          lane: options.lane,
+          headroomPercent: headroom.headroomPercent,
+          summary: `${headroom.headroomPercent.toFixed(1)}% headroom on the ${options.lane} lane`,
+        },
+        lease,
+      };
     });
   }
 

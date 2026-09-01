@@ -1436,6 +1436,22 @@ An invocation lease says “this account is likely consuming capacity.” It doe
 
 The first release should penalize active sessions but not try to estimate token burn. Add more sophisticated reservations only after real measurements.
 
+### 21.4 Standalone metered-lane claim (Codex Spark)
+
+A separately metered lane (e.g. the Codex Spark model tier, carried in `additional_rate_limits`/`other` windows per §15.3/§20.2) can have independent headroom while an account's general primary/secondary quota is exhausted. General selection must never resurrect an exhausted account for this — but a caller that already knows it wants Spark capacity on one exact account needs a way to claim it without reapplying general quota eligibility.
+
+`codex-swap select --account <account-key> --claim --metered-lane codex-spark --model <spark-model> --json` is that primitive. Contract, frozen narrowly:
+
+- `--metered-lane` accepts only the exact literal `codex-spark`.
+- It requires exact `--account`, `--claim`, and a `--model` whose normalized (lower-cased) name contains `spark`.
+- It is incompatible with `--strategy` and `--allow-unknown` — there is no balancing or unknown-usage waiver here, only one account, one lane.
+- Inside the existing `BEGIN IMMEDIATE` selection transaction: expire stale leases, locate the exact account's view, and revalidate every ordinary eligibility guard from §20.1 (`absent`, `ndy_disabled`, `manually_disabled`, `no_credentials`, `relogin_required`, `identity_conflict`, `cooldown_active`, `usage_unknown`, `family_rate_limited`, `max_concurrent_reached`). Only `quota_exhausted` is waived, and only after the Spark-lane check below passes independently.
+- Decision-grade current measurement must contain at least one `other` window whose identity — `limitName`, falling back to `meteredFeature` only when `limitName` is absent — maps case-insensitively to `codex-spark`, with positive headroom (the conservative minimum `remainingPercent`) across every matching window. Missing, unknown, stale, or exhausted Spark data all refuse; general quota exhaustion elsewhere never blocks it.
+- On success, it atomically reserves an ordinary invocation lease with fixed purpose `codex-spark-claim` — the same reservation/heartbeat/release lifecycle as any other lease, consumed the same way via `run --claim <lease-id> -- ...`. It never updates `selection_state` (§21.1 step 6): this is an invocation-only pin, not a balancing decision, exactly like a forced account pin but honest about capacity instead of bypassing every gate the way a forced account does.
+- It never falls back to another account. A caller wanting ranked retry across accounts owns that loop outside codex-swap.
+
+Implementation: `src/selection/metered-lane.ts` (lane identity/headroom helpers, `isSparkModel`), `SnapshotService.selectAndClaimMeteredLane` in `src/snapshot/service.ts` (the transaction), and the `--metered-lane`/`--model` branch in `src/cli/commands/select.ts`. See `docs/json-contracts.md` for the exact success/refusal JSON shapes.
+
 ---
 
 ## 22. Codex runner contract
