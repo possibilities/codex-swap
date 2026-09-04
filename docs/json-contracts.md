@@ -115,9 +115,13 @@ documented ones. `snapshot --json` is the primary integration boundary.
 ```
 
 `UsageMeasurement`: `{schemaVersion, probeKind, planType?, creditsLeft?,
-creditsUnlimited?, resetCreditsAvailable?, limitReached?, windows[],
+creditsUnlimited?, resetCreditsAvailable?, resetCreditExpirations?,
+limitReached?, windows[],
 fetchedAt}`. `resetCreditsAvailable` is a non-negative integer when reported
 and is display metadata only; it never affects headroom or selection.
+`resetCreditExpirations` is an optional array of ISO 8601 UTC timestamps or
+`null` for provider-declared non-expiring credits; omission means only the
+count is known.
 
 `UsageMeasurement.windows[]`: `{kind: primary|secondary|code_review|other,
 label: "5h"|"daily"|"weekly"|…, windowSeconds?, usedPercent (raw),

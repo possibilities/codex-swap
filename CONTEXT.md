@@ -24,8 +24,9 @@ release quarantine; never the raw token.
 quota windows, plan metadata, credits, and a fetch timestamp.
 
 **Reset credit** — A provider-issued, one-shot allowance for resetting Codex
-rate-limit capacity. Display metadata only; it does not contribute quota
-headroom or affect automatic selection.
+rate-limit capacity. Available credits may include an expiry or be explicitly
+non-expiring. Display metadata only; it does not contribute quota headroom or
+affect automatic selection.
 _Avoid_: "reset" alone, which is confusable with a window's scheduled reset.
 
 **Last-good measurement** — The newest successful usage measurement. A failed

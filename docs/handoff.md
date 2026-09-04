@@ -961,13 +961,17 @@ interface UsageMeasurement {
   planType?: string;
   creditsLeft?: number;
   resetCreditsAvailable?: number;
+  resetCreditExpirations?: Array<string | null>;
   windows: UsageWindow[];
   fetchedAt: string;
 }
 ```
 
-`resetCreditsAvailable` is display metadata only. It does not contribute to
-binding headroom, eligibility, selection, polling, or invocation leases.
+`resetCreditsAvailable` and `resetCreditExpirations` are display metadata only.
+The latter is omitted when only the count is known; each element is an ISO UTC
+expiry or `null` for a provider-declared non-expiring credit. Neither field
+contributes to binding headroom, eligibility, selection, polling, or invocation
+leases.
 
 Validation:
 

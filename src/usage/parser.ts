@@ -45,6 +45,15 @@ const wireResetCredits = z.looseObject({
   available_count: z.number().int().nonnegative().nullish(),
 });
 
+const wireResetCreditDetail = z.looseObject({
+  expires_at: z.string().nullish(),
+});
+
+const wireResetCreditDetails = z.looseObject({
+  available_count: z.number().int().nonnegative(),
+  credits: z.array(wireResetCreditDetail).nullish(),
+});
+
 const wireAdditionalLimit = z.looseObject({
   limit_name: z.string().nullish(),
   metered_feature: z.string().nullish(),
@@ -63,6 +72,37 @@ const wireUsageResponse = z.looseObject({
 export class UsageParseError extends Error {}
 
 const MAX_CREDIBLE_RESET_AHEAD_MS = 2 * 365 * 24 * 60 * 60 * 1000;
+
+export interface ResetCreditDetails {
+  availableCount: number;
+  expirations?: Array<string | null>;
+}
+
+/** Parses the dedicated reset-credit endpoint without retaining credit IDs. */
+export function parseResetCreditDetails(body: unknown): ResetCreditDetails {
+  const result = wireResetCreditDetails.safeParse(body);
+  if (!result.success) {
+    const issues = result.error.issues
+      .slice(0, 5)
+      .map((issue) => `${issue.path.join(".") || "$"}: ${issue.code}`)
+      .join("; ");
+    throw new UsageParseError(`reset-credit response failed validation (${issues})`);
+  }
+  const details: ResetCreditDetails = { availableCount: result.data.available_count };
+  if (result.data.credits != null) {
+    details.expirations = result.data.credits.map((credit) => {
+      if (credit.expires_at == null) return null;
+      const expiresAtMs = Date.parse(credit.expires_at);
+      if (!Number.isFinite(expiresAtMs)) {
+        throw new UsageParseError(
+          "reset-credit response failed validation (credits.expires_at: invalid timestamp)",
+        );
+      }
+      return toIsoUtc(expiresAtMs);
+    });
+  }
+  return details;
+}
 
 /** Duration buckets matching the official CLI's display labels. */
 function windowLabel(windowSeconds: number | undefined): string {

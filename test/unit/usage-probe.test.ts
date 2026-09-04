@@ -50,6 +50,7 @@ function input() {
 
 const GOOD_BODY = JSON.stringify({
   plan_type: "plus",
+  rate_limit_reset_credits: { available_count: 1 },
   rate_limit: {
     primary_window: {
       used_percent: 40,
@@ -59,22 +60,48 @@ const GOOD_BODY = JSON.stringify({
   },
 });
 
+const RESET_CREDIT_BODY = JSON.stringify({
+  available_count: 1,
+  credits: [{ expires_at: "2026-09-08T12:00:00Z" }],
+});
+
 test("success on wham endpoint sends exact headers and no redirect following", async () => {
-  const { impl, requests } = fakeFetch(() => new Response(GOOD_BODY, { status: 200 }));
+  const { impl, requests } = fakeFetch((url) =>
+    url.endsWith("rate-limit-reset-credits")
+      ? new Response(RESET_CREDIT_BODY, { status: 200 })
+      : new Response(GOOD_BODY, { status: 200 }),
+  );
   const measurement = await probeWith(impl).fetch(input());
 
   assert.equal(measurement.probeKind, "direct-wham");
   assert.equal(measurement.planType, "plus");
   assert.equal(measurement.fetchedAt, "2026-08-08T20:00:00.000Z");
+  assert.equal(measurement.resetCreditsAvailable, 1);
+  assert.deepEqual(measurement.resetCreditExpirations, ["2026-09-08T12:00:00.000Z"]);
 
-  assert.equal(requests.length, 1);
-  const request = requests[0];
+  assert.equal(requests.length, 2);
+  const request = requests.find((candidate) => candidate.url.endsWith("/backend-api/wham/usage"));
   assert.equal(request?.url, "https://chatgpt.com/backend-api/wham/usage");
   assert.equal(request?.redirect, "manual");
   assert.equal(request?.headers["Authorization"], `Bearer ${TOKEN}`);
   assert.equal(request?.headers["ChatGPT-Account-Id"], "acc_123");
   assert.equal(request?.headers["Accept"], "application/json");
   assert.match(request?.headers["User-Agent"] ?? "", /^codex-swap\/\d+\.\d+\.\d+$/);
+});
+
+test("reset-credit detail failure preserves the main count-only measurement", async () => {
+  const body = JSON.stringify({
+    ...JSON.parse(GOOD_BODY),
+    rate_limit_reset_credits: { available_count: 2 },
+  });
+  const { impl } = fakeFetch((url) =>
+    url.endsWith("rate-limit-reset-credits")
+      ? new Response("boom", { status: 503 })
+      : new Response(body, { status: 200 }),
+  );
+  const measurement = await probeWith(impl).fetch(input());
+  assert.equal(measurement.resetCreditsAvailable, 2);
+  assert.equal(measurement.resetCreditExpirations, undefined);
 });
 
 test("404 on wham falls back to the codex endpoint only", async () => {
@@ -90,6 +117,7 @@ test("404 on wham falls back to the codex endpoint only", async () => {
     [
       "https://chatgpt.com/backend-api/wham/usage",
       "https://chatgpt.com/api/codex/usage",
+      "https://chatgpt.com/api/codex/rate-limit-reset-credits",
     ],
   );
 });

@@ -52,6 +52,14 @@ async function startServer(): Promise<UsageServer> {
   const server = http.createServer((req, res) => {
     const account = req.headers["chatgpt-account-id"];
     const key = typeof account === "string" ? account : "none";
+    if (req.url?.includes("/api/codex/rate-limit-reset-credits") === true) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        available_count: 1,
+        credits: [{ expires_at: "2026-09-08T12:00:00Z" }],
+      }));
+      return;
+    }
     countsByAccount.set(key, (countsByAccount.get(key) ?? 0) + 1);
     if (mode === "server-error") {
       res.writeHead(503, { "content-type": "text/plain" });
@@ -139,6 +147,7 @@ interface SnapshotEnvelope {
         decisionGrade: boolean;
         measurement: {
           resetCreditsAvailable?: number;
+          resetCreditExpirations?: Array<string | null>;
           windows: Array<{ usedPercent: number }>;
         } | null;
         lastError: { code: string } | null;
@@ -188,6 +197,10 @@ test("eight concurrent snapshots produce at most one request per account, then T
     assert.equal(acc1?.usage.decisionGrade, true);
     assert.equal(acc1?.usage.measurement?.windows[0]?.usedPercent, 40);
     assert.equal(acc1?.usage.measurement?.resetCreditsAvailable, 1);
+    assert.deepEqual(
+      acc1?.usage.measurement?.resetCreditExpirations,
+      ["2026-09-08T12:00:00.000Z"],
+    );
     assert.equal(acc1?.selection.eligible, true);
     assert.deepEqual(acc1?.selection.exclusions, []);
 
@@ -225,6 +238,7 @@ test("a failed refresh retains and labels last-good usage", async () => {
           lastGoodUsage: {
             measurement: {
               resetCreditsAvailable?: number;
+              resetCreditExpirations?: Array<string | null>;
               windows: Array<{ usedPercent: number }>;
             };
           } | null;
@@ -244,6 +258,11 @@ test("a failed refresh retains and labels last-good usage", async () => {
       acc1.lastGoodUsage?.measurement.resetCreditsAvailable,
       1,
       "reset credits persist in last-good and survive the failure",
+    );
+    assert.deepEqual(
+      acc1.lastGoodUsage?.measurement.resetCreditExpirations,
+      ["2026-09-08T12:00:00.000Z"],
+      "reset-credit expiries persist in last-good and survive the failure",
     );
     // Fresh last-good (seconds old) stays decision-grade despite the error.
     assert.equal(acc1.usage.decisionGrade, true);

@@ -1,7 +1,11 @@
 import { packageInfo } from "../package-info.ts";
 import { type Clock, systemClock } from "../util/clock.ts";
 import { parseRetryAfterMs, UsageFetchError } from "./error-classifier.ts";
-import { parseUsageResponse, UsageParseError } from "./parser.ts";
+import {
+  parseResetCreditDetails,
+  parseUsageResponse,
+  UsageParseError,
+} from "./parser.ts";
 import type { UsageProbe, UsageProbeInput } from "./probe.ts";
 import type { ProbeKind, UsageMeasurement } from "./types.ts";
 
@@ -28,6 +32,7 @@ export class DirectUsageProbe implements UsageProbe {
   private readonly clock: Clock;
   private readonly timeoutMs: number;
   private readonly endpoints: readonly Endpoint[];
+  private readonly resetCreditDetailsUrl: string;
 
   constructor(options?: {
     fetchImpl?: typeof fetch;
@@ -47,6 +52,7 @@ export class DirectUsageProbe implements UsageProbe {
       { url: `${base}/backend-api/wham/usage`, probeKind: "direct-wham" },
       { url: `${base}/api/codex/usage`, probeKind: "direct-codex" },
     ];
+    this.resetCreditDetailsUrl = `${base}/api/codex/rate-limit-reset-credits`;
   }
 
   async fetch(input: UsageProbeInput): Promise<UsageMeasurement> {
@@ -62,6 +68,19 @@ export class DirectUsageProbe implements UsageProbe {
         sawNotFound = true;
         continue;
       }
+      // Detail enrichment is display-only and must not turn a usable quota
+      // measurement into a failure. Avoid the extra request when the usage
+      // response says there are no credits to describe.
+      const details =
+        (outcome.resetCreditsAvailable ?? 0) > 0
+          ? await this.fetchResetCreditDetails(input, signal)
+          : null;
+      if (details !== null) {
+        outcome.resetCreditsAvailable = details.availableCount;
+        if (details.expirations !== undefined) {
+          outcome.resetCreditExpirations = details.expirations;
+        }
+      }
       return outcome;
     }
     if (sawNotFound) {
@@ -75,11 +94,28 @@ export class DirectUsageProbe implements UsageProbe {
     throw new UsageFetchError("network", "no usage endpoint produced a result");
   }
 
-  private async fetchEndpoint(
-    endpoint: Endpoint,
+  private async fetchResetCreditDetails(
     input: UsageProbeInput,
     signal: AbortSignal,
-  ): Promise<UsageMeasurement | "not_found"> {
+  ): Promise<ReturnType<typeof parseResetCreditDetails> | null> {
+    try {
+      const response = await this.fetchImpl(this.resetCreditDetailsUrl, {
+        method: "GET",
+        redirect: "manual",
+        signal,
+        headers: this.headers(input),
+      });
+      if (response.status !== 200) {
+        await drainQuietly(response);
+        return null;
+      }
+      return parseResetCreditDetails(JSON.parse(await readBodyCapped(response, MAX_BODY_BYTES)));
+    } catch {
+      return null;
+    }
+  }
+
+  private headers(input: UsageProbeInput): Record<string, string> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${input.accessToken}`,
       Accept: "application/json",
@@ -88,13 +124,21 @@ export class DirectUsageProbe implements UsageProbe {
     if (input.providerAccountId !== undefined && input.providerAccountId.length > 0) {
       headers["ChatGPT-Account-Id"] = input.providerAccountId;
     }
+    return headers;
+  }
+
+  private async fetchEndpoint(
+    endpoint: Endpoint,
+    input: UsageProbeInput,
+    signal: AbortSignal,
+  ): Promise<UsageMeasurement | "not_found"> {
     let response: Response;
     try {
       response = await this.fetchImpl(endpoint.url, {
         method: "GET",
         redirect: "manual",
         signal,
-        headers,
+        headers: this.headers(input),
       });
     } catch (error) {
       throw classifyTransportError(error, endpoint.url);

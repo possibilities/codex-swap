@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseUsageResponse, UsageParseError } from "../../src/usage/parser.ts";
+import {
+  parseResetCreditDetails,
+  parseUsageResponse,
+  UsageParseError,
+} from "../../src/usage/parser.ts";
 import {
   bindingHeadroomPercent,
   bindingUsedPercent,
@@ -148,6 +152,29 @@ test("reset credits preserve zero, omit missing counts, and reject malformed cou
       UsageParseError,
     );
   }
+});
+
+test("reset-credit details normalize expiries and preserve non-expiring credits", () => {
+  assert.deepEqual(
+    parseResetCreditDetails({
+      available_count: 2,
+      credits: [
+        { expires_at: "2026-09-08T12:00:00Z" },
+        { expires_at: null },
+      ],
+    }),
+    {
+      availableCount: 2,
+      expirations: ["2026-09-08T12:00:00.000Z", null],
+    },
+  );
+  assert.deepEqual(parseResetCreditDetails({ available_count: 1 }), {
+    availableCount: 1,
+  });
+  assert.throws(
+    () => parseResetCreditDetails({ available_count: 1, credits: [{ expires_at: "later" }] }),
+    UsageParseError,
+  );
 });
 
 test("missing reset fields leave resetsAt undefined; reset_after_seconds substitutes", () => {

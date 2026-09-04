@@ -43,6 +43,11 @@ export interface UsageMeasurement {
   creditsUnlimited?: boolean;
   /** Provider-issued one-shot reset credits; display metadata only. */
   resetCreditsAvailable?: number;
+  /**
+   * Expiry of each detailed available reset credit. Null means the provider
+   * says that credit does not expire; absent means only the count is known.
+   */
+  resetCreditExpirations?: Array<string | null>;
   /** True when the provider says the general rate limit is currently reached. */
   limitReached?: boolean;
   windows: UsageWindow[];
