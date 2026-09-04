@@ -18,14 +18,14 @@ RECEIPT="$STATE_DIR/install-receipt"
 # 1 while we carry a patch upstream has not released; 0 uses the exact npm pin.
 # Nothing else in this file needs editing to switch between them.
 NDY_FORK_ACTIVE=0
-NDY_CHECKOUT="${CODEX_SWAP_NDY_CHECKOUT:-$HOME/src/codex-multi-auth}"
+NDY_CHECKOUT="${CODEX_SWAP_NDY_CHECKOUT:-$HOME/source/ndycode--codex-multi-auth}"
 NDY_FORK_URL="${CODEX_SWAP_NDY_FORK_URL:-https://github.com/possibilities/codex-multi-auth.git}"
 NDY_UPSTREAM_URL="https://github.com/ndycode/codex-multi-auth.git"
 # The integration branch: the one ref this installer builds and binds, by the
 # fleet's fork convention. Per-PR branches live beside it and are never moved
 # by an install.
 NDY_BRANCH="integration"
-NDY_UPSTREAM_REMOTE="origin"
+NDY_UPSTREAM_REMOTE="upstream"
 NDY_UPSTREAM_BRANCH="main"
 FORK_LOG="${CODEX_SWAP_FORK_LOG:-$STATE_DIR/fork-rebase.log}"
 SHIM_MARKER="codex-swap-installer-owned:v1"
@@ -157,18 +157,28 @@ rebase_fork_onto_upstream() {
 install_ndy_fork() {
     (( NDY_FORK_ACTIVE )) || { note "codex-multi-auth fork retired; using the npm pin"; return 0; }
 
+    local freshly_cloned=0
     if [ ! -d "${NDY_CHECKOUT}/.git" ]; then
-        note "cloning the codex-multi-auth fork into ${NDY_CHECKOUT}"
+        note "cloning codex-multi-auth upstream into ${NDY_CHECKOUT}"
         (( DRY )) && return 0
         mkdir -p "$(dirname "${NDY_CHECKOUT}")"
-        git clone --quiet --origin fork --branch "${NDY_BRANCH}" \
-            "${NDY_FORK_URL}" "${NDY_CHECKOUT}" || return 1
-        # Upstream stays reachable as `origin` so the checkout is also where
-        # the PR that retires this fork gets rebased and re-offered.
-        git -C "${NDY_CHECKOUT}" remote add origin "${NDY_UPSTREAM_URL}" 2>/dev/null || true
+        git clone --quiet --origin upstream \
+            "${NDY_UPSTREAM_URL}" "${NDY_CHECKOUT}" || return 1
+        freshly_cloned=1
     fi
 
-    local fork_url
+    local upstream_url fork_url
+    upstream_url="$(git -C "${NDY_CHECKOUT}" remote get-url upstream 2>/dev/null || true)"
+    if [ -z "${upstream_url}" ]; then
+        (( DRY )) || git -C "${NDY_CHECKOUT}" remote add upstream "${NDY_UPSTREAM_URL}" || return 1
+    elif [ "${upstream_url}" != "${NDY_UPSTREAM_URL}" ] &&
+         [ "${upstream_url}" != "git@github.com:ndycode/codex-multi-auth.git" ] &&
+         [ "${upstream_url}" != "https://github.com/ndycode/codex-multi-auth" ]; then
+        printf 'codex-swap install: %s remote upstream points at %s, not %s; refusing.\n' \
+            "${NDY_CHECKOUT}" "${upstream_url}" "${NDY_UPSTREAM_URL}" >&2
+        return 1
+    fi
+
     fork_url="$(git -C "${NDY_CHECKOUT}" remote get-url fork 2>/dev/null || true)"
     if [ -z "${fork_url}" ]; then
         (( DRY )) || git -C "${NDY_CHECKOUT}" remote add fork "${NDY_FORK_URL}" || return 1
@@ -187,6 +197,11 @@ install_ndy_fork() {
             "${NDY_CHECKOUT}" "${NDY_BRANCH}" >&2
         return 1
     }
+    if (( freshly_cloned )); then
+        git -C "${NDY_CHECKOUT}" branch --quiet --track \
+            "${NDY_BRANCH}" "fork/${NDY_BRANCH}" || return 1
+        git -C "${NDY_CHECKOUT}" checkout --quiet "${NDY_BRANCH}" || return 1
+    fi
     if [ -n "$(git -C "${NDY_CHECKOUT}" status --porcelain)" ]; then
         printf 'codex-swap install: %s has local changes; refusing to install them.\n' \
             "${NDY_CHECKOUT}" >&2
